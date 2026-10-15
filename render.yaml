@@ -1,0 +1,38 @@
+# Render Blueprint — New > Blueprint > pick this repo.
+# FREE plan: no persistent disk (Render docs: "Free web services cannot" attach disks).
+# => SQLite lives on the ephemeral filesystem and RESETS on every deploy/restart/spin-down
+#    (re-seeded with sample data on boot). For persistence switch plan to a paid one and
+#    uncomment the `disk:` block below.
+services:
+  - type: web
+    name: savehub
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SAVEHUB_MCP_TOKEN          # bearer token for https://<service>.onrender.com/mcp
+        generateValue: true
+      - key: SAVEHUB_DASHBOARD_PASSWORD # HTTP Basic login for the dashboard (user: savehub); /healthz and /mcp excluded
+        generateValue: true
+      - key: SAVEHUB_ENABLED_PLATFORMS
+        value: x,threads,instagram,facebook,messenger,whatsapp,wechat,tiktok,douyin,xiaohongshu,web
+      - key: SAVEHUB_DB
+        value: /workspace/savehub/data/savehub.db
+      - key: OPENAI_API_KEY             # optional: AI tagging/digest (else local tagger)
+        sync: false
+      - key: XAI_API_KEY                # optional: xAI instead of OpenAI
+        sync: false
+      - key: X_CLIENT_ID                # optional: X OAuth 2.0 app client id (callback https://<service>.onrender.com/api/x/callback)
+        sync: false
+      - key: NOTION_TOKEN               # optional: Notion integration token
+        sync: false
+      - key: NOTION_DATABASE_ID         # optional: Notion database id
+        sync: false
+    # Paid plans only (e.g. plan: starter):
+    # disk:
+    #   name: savehub-data
+    #   mountPath: /workspace/savehub/data
+    #   sizeGB: 1

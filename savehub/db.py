@@ -1,0 +1,269 @@
+"""SQLite storage with FTS5 (trigram tokenizer => works for English and Chinese substrings)."""
+import json, os, sqlite3, threading, time
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DB_PATH = Path(os.environ.get("SAVEHUB_DB", ROOT / "data" / "savehub.db"))
+
+PLATFORMS = {
+    "x":           {"name": "X (Twitter)", "method": "live_api", "detail": "Official X API v2, OAuth 2.0 PKCE, GET /2/users/:id/bookmarks. Needs your own X developer app Client ID (and an API tier that includes bookmarks)."},
+    "threads":     {"name": "Threads", "method": "import", "detail": "No public saved-posts API. Import Instagram/Threads 'Download your information' (JSON) export."},
+    "instagram":   {"name": "Instagram", "method": "import", "detail": "No public saved-posts API. Import 'Download your information' JSON (your_instagram_activity/saved/saved_posts.json)."},
+    "facebook":    {"name": "Facebook", "method": "import", "detail": "No public Saved API. Import 'Download your information' JSON (saved_items_and_collections)."},
+    "messenger":   {"name": "Messenger", "method": "import", "detail": "No API for personal chats. Import Facebook 'Download your information' messages JSON (links are extracted)."},
+    "whatsapp":    {"name": "WhatsApp", "method": "import", "detail": "No API for personal chats/starred messages. Use 'Export chat' (.txt); links in the chat become items."},
+    "wechat":      {"name": "WeChat 微信", "method": "import", "detail": "No export of Favourites (收藏). Paste share links / article links, or import a CSV/JSON/HTML link list."},
+    "tiktok":      {"name": "TikTok", "method": "import", "detail": "No public favourites API for personal use. Import TikTok data export JSON (Favorite Videos / Like List)."},
+    "douyin":      {"name": "抖音 Douyin", "method": "import", "detail": "No public favourites API. Paste share links (v.douyin.com) or import CSV/JSON/HTML link list."},
+    "xiaohongshu": {"name": "小红书 RED", "method": "import", "detail": "No public API. Paste share text/links (xhslink.com) or import CSV/JSON/HTML link list."},
+    "web":         {"name": "Web / Bookmarks", "method": "import", "detail": "Add a link manually, paste links, or import browser bookmarks HTML (Chrome/Firefox/Safari export)."},
+}
+
+DEFAULT_SETTINGS = {
+    "enabled_platforms": list(PLATFORMS.keys()),
+    "ai": {"provider": "auto", "model": "", "base_url": ""},  # auto|openai|xai|local
+    "notion": {"enabled": False, "token": "", "database_id": ""},
+    "drive": {"enabled": False, "mode": "folder", "folder_path": str(ROOT / "data" / "export"), "service_account_file": "", "folder_id": ""},
+    "x": {"client_id": "", "client_secret": "", "redirect_uri": (os.environ.get("SAVEHUB_PUBLIC_URL") or (f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}" if os.environ.get("RENDER_EXTERNAL_HOSTNAME") else "http://localhost:8765")).rstrip("/") + "/api/x/callback"},
+}
+
+_local = threading.local()
+
+def now_iso():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+def conn():
+    c = getattr(_local, "c", None)
+    if c is None:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        c = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA foreign_keys=ON")
+        _local.c = c
+        init(c)
+    return c
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS accounts(
+  id INTEGER PRIMARY KEY, platform TEXT NOT NULL, display_name TEXT, handle TEXT, profile_url TEXT,
+  linked_email TEXT, linked_phone TEXT, notes TEXT, tags TEXT DEFAULT '[]', status TEXT DEFAULT 'active',
+  connected_via TEXT DEFAULT 'manual', created_at TEXT, is_sample INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS items(
+  id INTEGER PRIMARY KEY, platform TEXT NOT NULL, account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+  url TEXT, title TEXT, content TEXT, author TEXT, author_handle TEXT, media_url TEXT,
+  saved_at TEXT, created_at TEXT, tags TEXT DEFAULT '[]', summary TEXT, tagger TEXT,
+  source TEXT, external_id TEXT, notion_page_id TEXT, is_sample INTEGER DEFAULT 0, raw TEXT,
+  UNIQUE(platform, url));
+CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(title, content, author, tags, summary, content='items', content_rowid='id', tokenize='trigram');
+CREATE TRIGGER IF NOT EXISTS items_ai AFTER INSERT ON items BEGIN
+  INSERT INTO items_fts(rowid,title,content,author,tags,summary) VALUES(new.id,new.title,new.content,coalesce(new.author,'')||' '||coalesce(new.author_handle,''),new.tags,new.summary); END;
+CREATE TRIGGER IF NOT EXISTS items_ad AFTER DELETE ON items BEGIN
+  INSERT INTO items_fts(items_fts,rowid,title,content,author,tags,summary) VALUES('delete',old.id,old.title,old.content,coalesce(old.author,'')||' '||coalesce(old.author_handle,''),old.tags,old.summary); END;
+CREATE TRIGGER IF NOT EXISTS items_au AFTER UPDATE ON items BEGIN
+  INSERT INTO items_fts(items_fts,rowid,title,content,author,tags,summary) VALUES('delete',old.id,old.title,old.content,coalesce(old.author,'')||' '||coalesce(old.author_handle,''),old.tags,old.summary);
+  INSERT INTO items_fts(rowid,title,content,author,tags,summary) VALUES(new.id,new.title,new.content,coalesce(new.author,'')||' '||coalesce(new.author_handle,''),new.tags,new.summary); END;
+CREATE TABLE IF NOT EXISTS contacts(
+  id INTEGER PRIMARY KEY, name TEXT, phones TEXT DEFAULT '[]', emails TEXT DEFAULT '[]', org TEXT,
+  platform TEXT, account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL, notes TEXT,
+  created_at TEXT, is_sample INTEGER DEFAULT 0, source TEXT);
+CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
+CREATE INDEX IF NOT EXISTS idx_items_saved ON items(saved_at);
+CREATE INDEX IF NOT EXISTS idx_items_platform ON items(platform);
+"""
+
+def init(c):
+    c.executescript(SCHEMA)
+    c.commit()
+
+def rows(cur):
+    out = []
+    for r in cur.fetchall():
+        d = dict(r)
+        for k in ("tags", "phones", "emails"):
+            if k in d and isinstance(d[k], str):
+                try: d[k] = json.loads(d[k])
+                except Exception: d[k] = []
+        d.pop("raw", None)
+        out.append(d)
+    return out
+
+# ---------------- settings ----------------
+def get_settings():
+    s = json.loads(json.dumps(DEFAULT_SETTINGS))
+    for r in conn().execute("SELECT key,value FROM settings"):
+        v = json.loads(r["value"])
+        if isinstance(s.get(r["key"]), dict) and isinstance(v, dict): s[r["key"]].update(v)
+        else: s[r["key"]] = v
+    # env overrides
+    if os.environ.get("X_CLIENT_ID") and not s["x"]["client_id"]: s["x"]["client_id"] = os.environ["X_CLIENT_ID"]
+    if os.environ.get("NOTION_TOKEN") and not s["notion"]["token"]: s["notion"]["token"] = os.environ["NOTION_TOKEN"]
+    if os.environ.get("NOTION_DATABASE_ID") and not s["notion"]["database_id"]: s["notion"]["database_id"] = os.environ["NOTION_DATABASE_ID"]
+    if os.environ.get("SAVEHUB_ENABLED_PLATFORMS"):
+        s["enabled_platforms"] = [p.strip() for p in os.environ["SAVEHUB_ENABLED_PLATFORMS"].split(",") if p.strip() in PLATFORMS]
+    return s
+
+def set_setting(key, value):
+    c = conn(); c.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, json.dumps(value))); c.commit()
+
+# ---------------- items ----------------
+ITEM_FIELDS = ["platform","account_id","url","title","content","author","author_handle","media_url","saved_at","tags","summary","tagger","source","external_id","is_sample","raw"]
+SORTS = {"saved_at":"i.saved_at","platform":"i.platform","author":"lower(i.author)","title":"lower(i.title)","created_at":"i.created_at"}
+
+def add_item(d, tag=True):
+    """Insert (or ignore duplicate platform+url). Returns (id, created)."""
+    from . import tagger
+    d = dict(d); d.setdefault("platform", "web"); d.setdefault("saved_at", now_iso())
+    if d["platform"] not in PLATFORMS: d["platform"] = "web"
+    if tag and not d.get("tags"):
+        t = tagger.tag_item(d); d["tags"], d["summary"], d["tagger"] = t["tags"], t["summary"], t["tagger"]
+    d["tags"] = json.dumps(d.get("tags") or [], ensure_ascii=False)
+    if isinstance(d.get("raw"), (dict, list)): d["raw"] = json.dumps(d["raw"], ensure_ascii=False)[:20000]
+    c = conn()
+    if d.get("url"):
+        ex = c.execute("SELECT id FROM items WHERE platform=? AND url=?", (d["platform"], d["url"])).fetchone()
+        if ex: return ex["id"], False
+    cols = [f for f in ITEM_FIELDS if f in d]
+    cur = c.execute(f"INSERT INTO items({','.join(cols)},created_at) VALUES({','.join('?'*len(cols))},?)", [d[f] for f in cols] + [now_iso()])
+    c.commit(); return cur.lastrowid, True
+
+def update_item(item_id, d):
+    d = {k: v for k, v in d.items() if k in ITEM_FIELDS}
+    if "tags" in d: d["tags"] = json.dumps(d["tags"], ensure_ascii=False)
+    if not d: return
+    c = conn(); c.execute(f"UPDATE items SET {','.join(k+'=?' for k in d)} WHERE id=?", list(d.values()) + [item_id]); c.commit()
+
+def get_item(item_id):
+    r = rows(conn().execute("SELECT i.*, a.display_name AS account_name, a.handle AS account_handle FROM items i LEFT JOIN accounts a ON a.id=i.account_id WHERE i.id=?", (item_id,)))
+    return r[0] if r else None
+
+def delete_item(item_id):
+    c = conn(); c.execute("DELETE FROM items WHERE id=?", (item_id,)); c.commit()
+
+def _fts_query(q):
+    # quote each term; trigram needs >=3 chars, shorter terms fall back to LIKE
+    terms = [t for t in q.replace('"', ' ').split() if t]
+    long_t = [t for t in terms if len(t) >= 3]
+    short_t = [t for t in terms if len(t) < 3]
+    return " AND ".join(f'"{t}"' for t in long_t), short_t
+
+def list_items(q="", platforms=None, tags=None, account_id=None, sort="saved_at", order="desc",
+               limit=50, offset=0, enabled_only=None, since=None, include_samples=True):
+    where, args = [], []
+    join = ""
+    if q:
+        fq, short = _fts_query(q)
+        if fq:
+            join = "JOIN items_fts f ON f.rowid=i.id"; where.append("items_fts MATCH ?"); args.append(fq)
+        for t in short:
+            where.append("(i.title LIKE ? OR i.content LIKE ? OR i.author LIKE ? OR i.tags LIKE ? OR i.summary LIKE ?)"); args += [f"%{t}%"]*5
+    if platforms: where.append(f"i.platform IN ({','.join('?'*len(platforms))})"); args += list(platforms)
+    if enabled_only is not None: where.append(f"i.platform IN ({','.join('?'*len(enabled_only)) or 'NULL'})"); args += list(enabled_only)
+    for t in (tags or []): where.append("EXISTS (SELECT 1 FROM json_each(i.tags) WHERE lower(value)=lower(?))"); args.append(t)
+    if account_id not in (None, ""): where.append("i.account_id=?"); args.append(int(account_id))
+    if since: where.append("i.saved_at>=?"); args.append(since)
+    if not include_samples: where.append("i.is_sample=0")
+    w = ("WHERE " + " AND ".join(where)) if where else ""
+    if sort == "relevance" and join: ob = "bm25(items_fts)"
+    else: ob = SORTS.get(sort, "i.saved_at") + (" ASC" if str(order).lower() == "asc" else " DESC")
+    c = conn()
+    total = c.execute(f"SELECT count(*) FROM items i {join} {w}", args).fetchone()[0]
+    res = rows(c.execute(f"SELECT i.*, a.display_name AS account_name, a.handle AS account_handle FROM items i {join} LEFT JOIN accounts a ON a.id=i.account_id {w} ORDER BY {ob}, i.id DESC LIMIT ? OFFSET ?", args + [int(limit), int(offset)]))
+    return {"total": total, "items": res}
+
+def all_tags(limit=100):
+    return [dict(r) for r in conn().execute("SELECT lower(value) AS tag, count(*) AS n FROM items, json_each(items.tags) GROUP BY lower(value) ORDER BY n DESC LIMIT ?", (limit,))]
+
+def clear_samples():
+    c = conn()
+    n = {t: c.execute(f"DELETE FROM {t} WHERE is_sample=1").rowcount for t in ("items", "contacts", "accounts")}
+    c.commit(); return n
+
+def stats():
+    c = conn()
+    return {"items": c.execute("SELECT count(*) FROM items").fetchone()[0],
+            "contacts": c.execute("SELECT count(*) FROM contacts").fetchone()[0],
+            "accounts": c.execute("SELECT count(*) FROM accounts").fetchone()[0],
+            "samples": c.execute("SELECT (SELECT count(*) FROM items WHERE is_sample=1)+(SELECT count(*) FROM contacts WHERE is_sample=1)+(SELECT count(*) FROM accounts WHERE is_sample=1)").fetchone()[0],
+            "by_platform": {r[0]: r[1] for r in c.execute("SELECT platform, count(*) FROM items GROUP BY platform")}}
+
+# ---------------- contacts ----------------
+CONTACT_FIELDS = ["name","phones","emails","org","platform","account_id","notes","is_sample","source"]
+def add_contact(d):
+    d = {k: v for k, v in d.items() if k in CONTACT_FIELDS}
+    for k in ("phones", "emails"):
+        v = d.get(k) or []
+        if isinstance(v, str): v = [x.strip() for x in v.replace(";", ",").split(",") if x.strip()]
+        d[k] = json.dumps(v, ensure_ascii=False)
+    c = conn()
+    ex = c.execute("SELECT id FROM contacts WHERE name=? AND phones=? AND emails=?", (d.get("name"), d["phones"], d["emails"])).fetchone()
+    if ex: return ex["id"], False
+    cols = list(d)
+    cur = c.execute(f"INSERT INTO contacts({','.join(cols)},created_at) VALUES({','.join('?'*len(cols))},?)", list(d.values()) + [now_iso()])
+    c.commit(); return cur.lastrowid, True
+
+def search_contacts(q="", account_id=None, platform=None, sort="name", order="asc", limit=100, offset=0):
+    where, args = [], []
+    if q:
+        for t in q.split():
+            where.append("(c.name LIKE ? OR c.phones LIKE ? OR c.emails LIKE ? OR c.org LIKE ? OR c.notes LIKE ?)"); args += [f"%{t}%"]*5
+    if account_id not in (None, ""): where.append("c.account_id=?"); args.append(int(account_id))
+    if platform: where.append("c.platform=?"); args.append(platform)
+    w = ("WHERE " + " AND ".join(where)) if where else ""
+    col = {"name": "lower(c.name)", "org": "lower(c.org)", "created_at": "c.created_at", "platform": "c.platform"}.get(sort, "lower(c.name)")
+    o = "DESC" if str(order).lower() == "desc" else "ASC"
+    cc = conn()
+    total = cc.execute(f"SELECT count(*) FROM contacts c {w}", args).fetchone()[0]
+    return {"total": total, "contacts": rows(cc.execute(f"SELECT c.*, a.display_name AS account_name FROM contacts c LEFT JOIN accounts a ON a.id=c.account_id {w} ORDER BY {col} {o} LIMIT ? OFFSET ?", args + [limit, offset]))}
+
+def delete_contact(cid):
+    c = conn(); c.execute("DELETE FROM contacts WHERE id=?", (cid,)); c.commit()
+
+# ---------------- accounts (no passwords stored, by design) ----------------
+ACCOUNT_FIELDS = ["platform","display_name","handle","profile_url","linked_email","linked_phone","notes","tags","status","connected_via","created_at","is_sample"]
+def add_account(d):
+    d = {k: v for k, v in d.items() if k in ACCOUNT_FIELDS}
+    t = d.get("tags") or []
+    if isinstance(t, str): t = [x.strip() for x in t.replace(";", ",").split(",") if x.strip()]
+    d["tags"] = json.dumps(t, ensure_ascii=False)
+    d.setdefault("created_at", now_iso()); d.setdefault("platform", "web")
+    c = conn()
+    if d.get("handle"):
+        ex = c.execute("SELECT id FROM accounts WHERE platform=? AND lower(handle)=lower(?)", (d["platform"], d["handle"])).fetchone()
+        if ex: return ex["id"], False
+    cols = list(d)
+    cur = c.execute(f"INSERT INTO accounts({','.join(cols)}) VALUES({','.join('?'*len(cols))})", list(d.values()))
+    c.commit(); return cur.lastrowid, True
+
+def update_account(aid, d):
+    d = {k: v for k, v in d.items() if k in ACCOUNT_FIELDS}
+    if "tags" in d:
+        t = d["tags"]
+        if isinstance(t, str): t = [x.strip() for x in t.split(",") if x.strip()]
+        d["tags"] = json.dumps(t, ensure_ascii=False)
+    if not d: return
+    c = conn(); c.execute(f"UPDATE accounts SET {','.join(k+'=?' for k in d)} WHERE id=?", list(d.values()) + [aid]); c.commit()
+
+def delete_account(aid):
+    c = conn(); c.execute("DELETE FROM accounts WHERE id=?", (aid,)); c.commit()
+
+def get_account(aid):
+    r = rows(conn().execute("SELECT * FROM accounts WHERE id=?", (aid,))); return r[0] if r else None
+
+def list_accounts(q="", platform=None, status=None, sort="platform", order="asc", limit=200, offset=0):
+    where, args = [], []
+    if q:
+        for t in q.split():
+            where.append("(display_name LIKE ? OR handle LIKE ? OR profile_url LIKE ? OR linked_email LIKE ? OR linked_phone LIKE ? OR notes LIKE ? OR tags LIKE ?)"); args += [f"%{t}%"]*7
+    if platform:
+        ps = platform if isinstance(platform, list) else [platform]
+        where.append(f"a.platform IN ({','.join('?'*len(ps))})"); args += ps
+    if status: where.append("status=?"); args.append(status)
+    w = ("WHERE " + " AND ".join(where)) if where else ""
+    col = {"platform": "platform, lower(display_name)", "display_name": "lower(display_name)", "handle": "lower(handle)", "created_at": "created_at", "status": "status"}.get(sort, "platform")
+    o = "DESC" if str(order).lower() == "desc" else "ASC"
+    c = conn()
+    total = c.execute(f"SELECT count(*) FROM accounts a {w}", args).fetchone()[0]
+    res = rows(c.execute(f"SELECT a.*, (SELECT count(*) FROM items i WHERE i.account_id=a.id) AS item_count, (SELECT count(*) FROM contacts k WHERE k.account_id=a.id) AS contact_count FROM accounts a {w} ORDER BY {col} {o} LIMIT ? OFFSET ?", args + [limit, offset]))
+    return {"total": total, "accounts": res}

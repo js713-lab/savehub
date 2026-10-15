@@ -1,0 +1,3 @@
+platform,display_name,handle,profile_url,linked_email,linked_phone,notes,tags,status,connected_via,password
+threads,Js Threads (sample),js.threads.sample,https://www.threads.net/@js.threads.sample,js.sample@example.com,,imported,"personal, sample",active,csv,SHOULD_NOT_BE_STORED
+douyin,Js 抖音 (sample),js_dy_sample,,,+60 12-000 0000,,chinese,dormant,csv,

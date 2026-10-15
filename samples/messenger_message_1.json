@@ -1,0 +1,3 @@
+{"participants":[{"name":"Sample Friend"},{"name":"Js"}],"messages":[
+ {"sender_name":"Sample Friend","timestamp_ms":1760500000000,"content":"check this ramen place https://example.com/sample/ramen-kl","share":{"link":"https://example.com/sample/ramen-kl"}},
+ {"sender_name":"Js","timestamp_ms":1760400000000,"content":"ok!"}]}

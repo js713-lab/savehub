@@ -1,0 +1,13 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:Sample Contact One
+TEL;TYPE=CELL:+60 12-999 0001
+EMAIL:one@example.com
+ORG:Sample Co
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+N:王;小红;;;
+FN:王小红 (sample)
+TEL:+60 16-999 0002
+END:VCARD

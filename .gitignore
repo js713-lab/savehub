@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.log
+data/*.db
+data/*.db-*
+data/.mcp_token
+data/export/
+*.zip
+data/*
+!data/.gitkeep
