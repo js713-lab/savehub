@@ -46,6 +46,7 @@ How it works: one uvicorn process binds `0.0.0.0:$PORT`. `/mcp` goes to the MCP 
 | Auto-tagging (tags + 1-line summary per item): OpenAI-compatible LLM if `OPENAI_API_KEY` or `XAI_API_KEY` set, else local keyword + TF-IDF tagger | ✅ local tagger tested · ⚠️ LLM path implemented, **not tested** (no key on build box) |
 | Summary/digest: counts by platform, top tags & authors, recent saves, written digest (AI if key, template otherwise) | ✅ template tested · ⚠️ AI digest untested |
 | Accounts: many accounts per platform; add/edit/delete; search/sort/filter; CSV import/export; items & contacts link via `account_id` | ✅ tested. **Passwords are never stored** (API rejects password/secret fields; CSV password columns are dropped) |
+| Accounts UX: guided **Add account** (pick app from tiles → form; `@` auto-prefix, profile URL auto-built for X/Threads/Instagram/Facebook/Messenger/TikTok/WhatsApp, inline validation, duplicate check, Enter/Esc, **Save & add another** with running count + undo), **Paste handles** bulk add with live preview (`POST /api/accounts/preview`, `POST /api/accounts/bulk`; lines like `@foo`, `ig @foo Name`, `foo, Name`, profile links), grouped-by-platform cards or table, platform/status segments with counts, search (`/`), sort, inline quick edit, delete with confirmation (+ undo when nothing is linked), toasts, empty state, mobile bottom-sheet, `GET /api/accounts/stats` | ✅ tested (`tests/accounts_ui_test.py`, headless Chromium, 30 checks) |
 | Contacts: vCard (.vcf) + CSV (Google/Outlook style) import, searchable, linkable to account | ✅ tested |
 | Importers (see below) | ✅ tested with the synthetic files in `samples/` — real exports vary; adjust if a field is missed |
 | X live API: OAuth 2.0 PKCE → `GET /2/users/:id/bookmarks` (paginated, refresh tokens) | ⚠️ implemented, auth-URL generation tested; **token exchange & fetch untested** (needs your Client ID + an X API tier with bookmarks) |
@@ -114,7 +115,8 @@ Tools: `search_items, list_items, get_item, add_item, tag_items, get_summary, li
 
 ## Tests
 ```bash
-.venv/bin/python -m pytest -q tests/test_all.py      # API, search, sort, tagging, summary, every importer, accounts, drive-folder sync, X auth URL (temp DB)
+.venv/bin/python -m pytest -q tests/test_all.py      # API, search, sort, tagging, summary, every importer, accounts, drive-folder sync, X auth URL, bulk account paste (temp DB)
+.venv/bin/python tests/accounts_ui_test.py           # Accounts UI end-to-end + screenshots (needs server on :8900)
 .venv/bin/python tests/mcp_client_test.py            # every MCP tool over stdio (temp DB) + HTTP at $SAVEHUB_MCP_URL (default :8765/mcp)
 .venv/bin/python tests/combined_server_test.py       # boots combined server on PORT=8900 with a fresh DB: /healthz, dashboard, REST, MCP auth/hosts/tools
 .venv/bin/python tests/screenshots.py                # headless screenshots → screenshots/

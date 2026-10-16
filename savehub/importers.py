@@ -277,3 +277,74 @@ def import_auto(kind, data, platform=None, account_id=None, filename=""):
     if kind == "contacts_csv": return import_contacts_csv(data, account_id, platform)
     if kind == "accounts_csv": return import_accounts_csv(data)
     raise ValueError(f"unknown import kind {kind}; one of {KINDS}")
+
+# ---------- accounts: handle normalisation + bulk paste ----------
+PROFILE_URL = {
+    "x": "https://x.com/{h}", "threads": "https://www.threads.net/@{h}", "instagram": "https://www.instagram.com/{h}/",
+    "facebook": "https://www.facebook.com/{h}", "messenger": "https://m.me/{h}", "tiktok": "https://www.tiktok.com/@{h}",
+}
+PLATFORM_ALIASES = {
+    "x": "x", "twitter": "x", "tw": "x", "threads": "threads", "th": "threads", "instagram": "instagram", "ig": "instagram", "insta": "instagram",
+    "facebook": "facebook", "fb": "facebook", "messenger": "messenger", "msgr": "messenger", "whatsapp": "whatsapp", "wa": "whatsapp",
+    "wechat": "wechat", "weixin": "wechat", "wx": "wechat", "微信": "wechat", "tiktok": "tiktok", "tt": "tiktok",
+    "douyin": "douyin", "dy": "douyin", "抖音": "douyin", "xiaohongshu": "xiaohongshu", "xhs": "xiaohongshu", "red": "xiaohongshu",
+    "rednote": "xiaohongshu", "小红书": "xiaohongshu", "web": "web",
+}
+
+def clean_handle(h):
+    h = (h or "").strip().strip(",;|")
+    return h[1:].strip() if h.startswith("@") else h
+
+def profile_url_for(platform, handle):
+    h = clean_handle(handle)
+    if platform == "whatsapp":
+        digits = re.sub(r"\D", "", h)
+        return f"https://wa.me/{digits}" if len(digits) >= 7 else ""
+    if not h or " " in h: return ""
+    t = PROFILE_URL.get(platform)
+    return t.format(h=h) if t else ""
+
+def _handle_from_url(url):
+    path = [p for p in re.sub(r"^https?://[^/]+", "", url.split("?")[0]).split("/") if p]
+    if not path: return ""
+    h = path[-1] if path[0] in ("user", "profile", "people") else path[0]
+    return clean_handle(h)
+
+def parse_handle_lines(text, platform="", default_status="active", tags=None):
+    """Parse pasted lines into account dicts. Accepted per line:
+    '@foo' · 'foo' · 'instagram @foo' · 'ig @foo Food account' · '@foo, Display Name' · 'https://instagram.com/foo'.
+    Lines starting with '#' are ignored."""
+    out, errors = [], []
+    for n, raw in enumerate((text or "").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"): continue
+        name = ""
+        if "," in line or "|" in line or "\t" in line:
+            line, name = [s.strip() for s in re.split(r"[,|\t]", line, maxsplit=1)]
+        parts = line.split()
+        p, explicit = platform or "", False
+        if parts and PLATFORM_ALIASES.get(parts[0].lower().rstrip(":")) and len(parts) > 1:
+            p, explicit = PLATFORM_ALIASES[parts.pop(0).lower().rstrip(":")], True
+        if not parts: errors.append({"line": n, "text": raw, "error": "no handle"}); continue
+        tok, rest = parts[0], " ".join(parts[1:])
+        url = ""
+        if re.match(r"^https?://", tok, re.I):
+            url = tok; p = p if explicit else (detect_platform(tok, "") or p); h = _handle_from_url(tok)
+        else:
+            h = clean_handle(tok)
+            if p == "whatsapp" and rest and re.fullmatch(r"[\d\s\-()+]+", tok + " " + rest):
+                h, rest = (tok + " " + rest).strip(), ""
+        name = name or rest
+        if not p: errors.append({"line": n, "text": raw, "error": "unknown platform — pick one or prefix the line, e.g. 'instagram @foo'"}); continue
+        if not h: errors.append({"line": n, "text": raw, "error": "no handle"}); continue
+        out.append({"platform": p, "handle": h, "display_name": name or "", "profile_url": url or profile_url_for(p, h),
+                    "status": default_status or "active", "tags": list(tags or []), "connected_via": "bulk paste"})
+    return out, errors
+
+def bulk_add_accounts(text, platform="", status="active", tags=None):
+    parsed, errors = parse_handle_lines(text, platform, status, tags)
+    created, dups = [], []
+    for d in parsed:
+        aid, cr = db.add_account(d)
+        (created if cr else dups).append({"id": aid, "platform": d["platform"], "handle": d["handle"]})
+    return {"parsed": len(parsed), "created": len(created), "duplicates": len(dups), "created_accounts": created, "duplicate_accounts": dups, "errors": errors}

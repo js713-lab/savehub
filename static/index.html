@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SaveHub — all your saves in one place</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
 <header class="top">
@@ -19,8 +19,8 @@
   <button class="btn small" onclick="clearSamples()">Clear sample data</button>
 </div>
 <main id="view"></main>
-<div id="modal" class="modal hidden"><div class="modal-card" id="modalcard"></div></div>
-<div id="toast" class="toast hidden"></div>
-<script src="/static/app.js"></script>
+<div id="modal" class="modal hidden"><div class="modal-card" id="modalcard" role="dialog" aria-modal="true"></div></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="/static/app.js?v=2"></script>
 </body>
 </html>

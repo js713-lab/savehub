@@ -90,6 +90,29 @@ def test_accounts_crud_export():
     assert srt == sorted(srt)
     assert c.delete(f"/api/accounts/{aid}").json()["ok"]
 
+def test_accounts_bulk_paste_preview_stats():
+    text = "@bulk.one\nbulk_two, Bulk Two\ntiktok @bulk.tt TT Name\nhttps://www.threads.net/@bulk.th\n# comment\n@bulk.one\nxhs 小红书号123\nwa +60 12-345 6789"
+    pv = c.post("/api/accounts/preview", json={"text": text, "platform": "instagram"}).json()
+    assert len(pv["accounts"]) == 7 and not pv["errors"]
+    r = c.post("/api/accounts/bulk", json={"text": text, "platform": "instagram", "status": "dormant", "tags": "bulk, test"}).json()
+    assert r["created"] == 6 and r["duplicates"] == 1, r
+    ig = {a["handle"]: a for a in c.get("/api/accounts", params={"platform": "instagram", "q": "bulk"}).json()["accounts"]}
+    assert ig["bulk.one"]["profile_url"] == "https://www.instagram.com/bulk.one/" and ig["bulk.one"]["status"] == "dormant" and ig["bulk.one"]["tags"] == ["bulk", "test"]
+    assert ig["bulk_two"]["display_name"] == "Bulk Two"
+    tt = c.get("/api/accounts", params={"platform": "tiktok", "q": "bulk.tt"}).json()["accounts"][0]
+    assert tt["display_name"] == "TT Name" and tt["profile_url"] == "https://www.tiktok.com/@bulk.tt"
+    assert c.get("/api/accounts", params={"platform": "threads", "q": "bulk.th"}).json()["total"] == 1
+    assert c.get("/api/accounts", params={"platform": "xiaohongshu", "q": "小红书号123"}).json()["total"] == 1
+    wa = c.get("/api/accounts", params={"platform": "whatsapp", "q": "345"}).json()["accounts"][0]
+    assert wa["profile_url"] == "https://wa.me/60123456789"
+    assert c.post("/api/accounts/bulk", json={"text": "@nope"}).json()["errors"]  # no platform -> error, nothing created
+    assert c.post("/api/accounts/bulk", json={"text": "@a", "platform": "instagram", "password": "x"}).status_code == 400
+    assert c.post("/api/accounts/bulk", json={"text": "@a", "platform": "myspace"}).status_code == 400
+    st = c.get("/api/accounts/stats").json(); assert st["by_platform"]["instagram"] >= 3 and st["by_status"]["dormant"] >= 6
+    assert c.get("/api/accounts", params={"status": "dormant", "q": "bulk"}).json()["total"] == 6
+    for a in c.get("/api/accounts", params={"q": "bulk"}).json()["accounts"]: c.delete(f"/api/accounts/{a['id']}")
+    for a in c.get("/api/accounts", params={"q": "小红书号123"}).json()["accounts"] + c.get("/api/accounts", params={"platform": "whatsapp", "q": "345"}).json()["accounts"]: c.delete(f"/api/accounts/{a['id']}")
+
 def test_settings_sync_drive_folder(tmp_path):
     c.put("/api/settings", json={"drive": {"enabled": True, "mode": "folder", "folder_path": str(tmp_path)}})
     r = c.post("/api/sync").json()

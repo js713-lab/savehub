@@ -105,6 +105,31 @@ async def add_account(req: Request):
     if any("password" in k.lower() or "secret" in k.lower() for k in d): raise HTTPException(400, "SaveHub does not store passwords/secrets. Use a password manager.")
     aid, c = db.add_account(d); return {"id": aid, "created": c, "account": db.get_account(aid)}
 
+@app.post("/api/accounts/bulk")
+async def bulk_accounts(req: Request):
+    """Bulk-add from pasted lines ('@foo', 'instagram @foo', 'ig @foo Display name', profile URLs). Never stores passwords."""
+    d = await req.json()
+    if any("password" in k.lower() or "secret" in k.lower() for k in d): raise HTTPException(400, "SaveHub does not store passwords/secrets. Use a password manager.")
+    p = d.get("platform") or ""
+    if p and p not in db.PLATFORMS: raise HTTPException(400, f"Unknown platform: {p}")
+    if not (d.get("text") or "").strip(): raise HTTPException(400, "text required (one handle per line)")
+    tags = d.get("tags") or []
+    if isinstance(tags, str): tags = [t.strip() for t in tags.split(",") if t.strip()]
+    return importers.bulk_add_accounts(d["text"], p, d.get("status") or "active", tags)
+
+@app.post("/api/accounts/preview")
+async def preview_accounts(req: Request):
+    d = await req.json()
+    parsed, errors = importers.parse_handle_lines(d.get("text") or "", d.get("platform") or "")
+    return {"accounts": parsed, "errors": errors}
+
+@app.get("/api/accounts/stats")
+def account_stats():
+    c = db.conn()
+    return {"total": c.execute("SELECT count(*) FROM accounts").fetchone()[0],
+            "by_platform": {r[0]: r[1] for r in c.execute("SELECT platform, count(*) FROM accounts GROUP BY platform")},
+            "by_status": {(r[0] or ""): r[1] for r in c.execute("SELECT status, count(*) FROM accounts GROUP BY status")}}
+
 @app.put("/api/accounts/{aid}")
 async def put_account(aid: int, req: Request):
     db.update_account(aid, await req.json()); return db.get_account(aid)
