@@ -45,7 +45,7 @@ async def add_item(req: Request):
     d.setdefault("title", d.get("url"))
     # browser collectors tag their pushes as "collector:<platform>"; anything else is a manual add
     src = str(d.get("source") or "")
-    d["source"] = src if re.fullmatch(r"collector:[a-z0-9_]{1,32}", src) else "manual"
+    d["source"] = src if re.fullmatch(r"collector:[a-z0-9_]{1,32}(?::[a-z0-9][a-z0-9._-]{0,63})?", src) else "manual"
     iid, created = db.add_item(d)
     return {"id": iid, "created": created, "item": db.get_item(iid)}
 

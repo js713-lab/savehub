@@ -228,7 +228,7 @@ def test_mcp_never_exposes_secrets(monkeypatch):
     out = json.dumps([mcp_server.list_accounts(), mcp_server.search_accounts("vault.mcp"), mcp_server.add_account("x", handle="vault.mcp2")], ensure_ascii=False)
     assert PLAIN not in out and cipher not in out and "has_password" not in out
     tools = asyncio.run(mcp_server.mcp.list_tools())
-    assert len(tools) == 13
+    assert len(tools) == 15
     for t in tools:
         assert "password" not in json.dumps(t.inputSchema).lower() and "secret" not in t.name.lower() and "vault" not in t.name.lower(), t.name
     c.delete(f"/api/accounts/{aid}")

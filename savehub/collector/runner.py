@@ -48,19 +48,26 @@ def run_collect(platform: str, cfg: RunConfig, sink=None, sessions_dir=None, bro
     `browser` / `context_hook(ctx)` let tests inject a browser and route network to fixtures."""
     col = get_collector(platform)
     if not col.implemented: col.collect(None, cfg)          # raises NotImplementedPlatform with the TODO
-    sfile = sessions.session_path(platform, sessions_dir)
-    if not sfile.exists(): raise NeedLogin(platform, sfile, "no saved session file")
+    try: akey = sessions.account_key(cfg.account_handle)
+    except ValueError as e: raise CollectorError(str(e)) from None
+    acct = "" if akey == sessions.DEFAULT_ACCOUNT else akey
+    sfile = sessions.session_path(platform, sessions_dir, akey)
+    if not sfile.exists(): raise NeedLogin(platform, sfile, "no saved session file", acct)
     if cfg.unsave and sink is None: raise CollectorError("--unsave needs a sink (it only un-saves items confirmed stored in SaveHub)")
     started = time.time(); collected_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    summary = {"platform": platform, "status": "ok", "session_file": str(sfile), "unsave_mode": cfg.unsave_mode,
+    summary = {"platform": platform, "account": ("@" + acct) if acct else sessions.DEFAULT_ACCOUNT, "account_id": None,
+               "status": "ok", "session_file": str(sfile), "unsave_mode": cfg.unsave_mode,
                "collected": 0, "created": 0, "duplicates": 0, "push_failed": 0, "unsave": {}, "items": []}
-    ev("run.start", platform=platform, max_items=cfg.max_items, unsave=cfg.unsave_mode, sink=getattr(sink, "kind", "none"))
+    ev("run.start", platform=platform, account=summary["account"], max_items=cfg.max_items, unsave=cfg.unsave_mode, sink=getattr(sink, "kind", "none"))
     if sink is not None:
         h = sink.check(); ev("savehub.ok", items=(h.get("stats") or {}).get("items"))
-        if cfg.account_id is None and cfg.account_handle:
-            cfg.account_id = sink.resolve_account(platform, cfg.account_handle)
-            if cfg.account_id is None: ev("account.not_found", logging.WARNING, handle=cfg.account_handle, note="items stored without account link")
-            else: ev("account.resolved", handle=cfg.account_handle, account_id=cfg.account_id)
+        if cfg.account_id is None and acct:
+            # link to the dashboard's account row for this handle; create it (connected_via=collector) if missing
+            ensure = getattr(sink, "ensure_account", None) or sink.resolve_account
+            cfg.account_id = ensure(platform, acct)
+            if cfg.account_id is None: ev("account.not_found", logging.WARNING, handle=acct, note="items stored without account link (still tagged in source)")
+            else: ev("account.linked", handle=acct, account_id=cfg.account_id)
+    summary["account_id"] = cfg.account_id
     with contextlib.ExitStack() as stack:
         if browser is None:
             pw = stack.enter_context(_require_playwright()())
@@ -69,6 +76,7 @@ def run_collect(platform: str, cfg: RunConfig, sink=None, sessions_dir=None, bro
         if context_hook: context_hook(ctx)
         page = ctx.new_page(); page.set_default_timeout(cfg.page_timeout_ms)
         items = col.collect(page, cfg, sfile)
+        for it in items: it.source_account = acct           # attribution: source=collector:<platform>:<account>
         summary["collected"] = len(items)
         ev("collect.done", count=len(items))
         results = []
@@ -108,12 +116,16 @@ def _unsave(col, page, confirmed, cfg, sfile) -> dict:
     return out
 
 
-def run_login(platform: str, sessions_dir=None, timeout_s: int = 600, wait_enter: bool = False, browser=None, context_hook=None) -> dict:
+def run_login(platform: str, sessions_dir=None, timeout_s: int = 600, wait_enter: bool = False, browser=None, context_hook=None,
+              account: str = "") -> dict:
     """Open a HEADFUL browser at the platform's login page so a human can log in; save storage_state when done.
-    Finishes when the collector detects a signed-in session (or Enter is pressed with wait_enter)."""
+    Finishes when the collector detects a signed-in session (or Enter is pressed with wait_enter).
+    `account` (handle) stores the session as <platform>@<handle>.json so several accounts can stay logged in."""
     col = get_collector(platform)
     if not col.implemented: col.is_logged_in(None)           # raises NotImplementedPlatform
-    sfile = sessions.session_path(platform, sessions_dir)
+    try: akey = sessions.account_key(account)
+    except ValueError as e: raise CollectorError(str(e)) from None
+    sfile = sessions.session_path(platform, sessions_dir, akey)
     with contextlib.ExitStack() as stack:
         if browser is None:
             pw = stack.enter_context(_require_playwright()())
@@ -133,8 +145,8 @@ def run_login(platform: str, sessions_dir=None, timeout_s: int = 600, wait_enter
                 if col.is_logged_in(page): ok = True; break
                 page.wait_for_timeout(2000)
         if not ok:
-            raise NeedLogin(platform, sfile, "login not detected before timeout; nothing saved")
+            raise NeedLogin(platform, sfile, "login not detected before timeout; nothing saved", akey)
         page.wait_for_timeout(3000)                            # let the app finish setting cookies
         sessions.save_state(ctx, sfile)
-    ev("login.saved", platform=platform, session_file=str(sfile))
-    return {"platform": platform, "status": "logged_in", **sessions.describe(sfile)}
+    ev("login.saved", platform=platform, account=akey, session_file=str(sfile))
+    return {"platform": platform, "account": akey if akey == sessions.DEFAULT_ACCOUNT else "@" + akey, **sessions.describe(sfile), "status": "logged_in"}

@@ -71,6 +71,14 @@ class RestSink:
             if (a.get("handle") or "").lstrip("@").lower() == h: return a["id"]
         return None
 
+    def ensure_account(self, platform: str, handle: str) -> Optional[int]:
+        """Account row id for this handle; created (connected_via=collector) if the dashboard has none yet."""
+        aid = self.resolve_account(platform, handle)
+        if aid is not None: return aid
+        h = "@" + handle.lstrip("@")
+        r = self._req("POST", "/api/accounts", json={"platform": platform, "handle": h, "display_name": h, "connected_via": "collector"})
+        return r.json().get("id") if r.status_code == 200 else None
+
     def push(self, item: CollectedItem, account_id=None, collected_at="") -> PushResult:
         res = PushResult(item)
         try:
@@ -106,6 +114,12 @@ class SqliteSink:
         for a in self.db.list_accounts(h, platform)["accounts"]:
             if (a.get("handle") or "").lstrip("@").lower() == h: return a["id"]
         return None
+
+    def ensure_account(self, platform, handle):
+        aid = self.resolve_account(platform, handle)
+        if aid is not None: return aid
+        h = "@" + handle.lstrip("@")
+        return self.db.add_account({"platform": platform, "handle": h, "display_name": h, "connected_via": "collector"})[0]
 
     def push(self, item, account_id=None, collected_at="") -> PushResult:
         res = PushResult(item)

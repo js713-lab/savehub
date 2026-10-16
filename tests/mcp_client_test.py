@@ -11,7 +11,7 @@ def out(r):
     except Exception: return t
 
 async def stdio_test():
-    env = {**os.environ, "SAVEHUB_DB": os.path.join(tempfile.mkdtemp(), "mcp.db"),
+    env = {**os.environ, "SAVEHUB_DB": os.path.join(tempfile.mkdtemp(), "mcp.db"), "SAVEHUB_SESSIONS_DIR": tempfile.mkdtemp(),
            "SAVEHUB_ENABLED_PLATFORMS": "x,instagram,xiaohongshu,douyin,tiktok,wechat,whatsapp,web"}
     params = StdioServerParameters(command=sys.executable, args=["-m", "savehub.mcp_server"], env=env, cwd=str(ROOT))
     async with stdio_client(params) as (r, w):
@@ -36,10 +36,23 @@ async def stdio_test():
                 ("list_accounts", {"platform": "x"}),
                 ("add_account", {"platform": "tiktok", "display_name": "MCP test", "handle": "mcp.test"}),
                 ("search_accounts", {"query": "example.com"}),
+                ("login_status", {"platform": "x"}),
+                ("login_status", {"platform": "x", "account": "@me"}),
+                ("collect", {"platform": "x"}),                       # no session -> need_login, returns immediately
+                ("collect", {"platform": "instagram", "account": "@me"}),   # stub collector -> not_implemented
             ]
+            fails = []
             for name, args in calls:
                 res = out(await s.call_tool(name, args))
-                if name == "list_platforms": brief = {p["id"]: p["enabled"] for p in res["platforms"]}
+                if name == "list_platforms":
+                    brief = {p["id"]: [p["enabled"], p["collector"]["implemented"], p["collector"]["logged_in_accounts"]] for p in res["platforms"]}
+                    if not all("collector" in p for p in res["platforms"]) or "collector_runtime" not in res: fails.append(name)
+                elif name == "login_status":
+                    brief = res
+                    if res.get("logged_in") is not False or "fix" not in res: fails.append(name)
+                elif name == "collect":
+                    brief = res
+                    if res.get("status") not in ("need_login", "not_implemented"): fails.append(name)
                 elif isinstance(res, dict) and "items" in res: brief = {"total": res["total"], "titles": [i["title"][:40] for i in res["items"][:3]], "platforms": sorted({i["platform"] for i in res["items"]})}
                 elif isinstance(res, dict) and name == "get_summary": brief = {"total": res["total"], "by_platform": res["by_platform"], "digest": res["digest"][:120]}
                 elif isinstance(res, dict) and "accounts" in res: brief = {"total": res["total"], "handles": [a["handle"] for a in res["accounts"]]}
@@ -47,6 +60,9 @@ async def stdio_test():
                 elif isinstance(res, dict) and name == "get_item": brief = {k: res.get(k) for k in ("id", "title", "tags")}
                 else: brief = res
                 print(f"  {name}({json.dumps(args, ensure_ascii=False)[:70]}) -> {json.dumps(brief, ensure_ascii=False)[:300]}")
+            assert {"login_status", "collect"} <= set(tools) and len(tools) == 15, tools
+            assert not fails, fails
+            print("STDIO: all tool calls OK")
 
 async def http_test():
     try:

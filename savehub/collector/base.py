@@ -19,11 +19,13 @@ class NeedLogin(CollectorError):
     """The saved session is missing/expired: the app redirected to its login page."""
     exit_code = EXIT_NEED_LOGIN
 
-    def __init__(self, platform: str, session_file: Path | str, detail: str = ""):
+    def __init__(self, platform: str, session_file: Path | str, detail: str = "", account: str = ""):
         self.platform, self.session_file, self.detail = platform, str(session_file), detail
-        super().__init__(f"need login for '{platform}': {detail or 'not logged in'}. "
-                         f"Create/refresh the session file {self.session_file} with: "
-                         f"python -m savehub.collector login {platform}")
+        self.account = account if account and account != "default" else ""
+        self.fix = f"python -m savehub.collector login {platform}" + (f" --account @{self.account}" if self.account else "")
+        who = f"'{platform}' account @{self.account}" if self.account else f"'{platform}'"
+        super().__init__(f"need login for {who}: {detail or 'not logged in'}. "
+                         f"Create/refresh the session file {self.session_file} with: {self.fix}")
 
 
 class NotImplementedPlatform(CollectorError, NotImplementedError):
@@ -43,14 +45,17 @@ class CollectedItem:
     has_media: bool = False
     media_url: str = ""
     extra: dict = field(default_factory=dict)
+    source_account: str = ""     # account key (handle w/o '@') of the session it was collected with; "" = default session
 
     def to_savehub(self, account_id: Optional[int] = None, collected_at: str = "") -> dict:
         """Payload for POST /api/items (also accepted by db.add_item)."""
         title = " ".join(self.text.split())[:120] or (f"@{self.author_handle} on {self.platform}" if self.author_handle else self.url)
         d = {"platform": self.platform, "url": self.url, "title": title, "content": self.text,
              "author": self.author, "author_handle": self.author_handle, "media_url": self.media_url or None,
-             "external_id": self.external_id, "source": f"collector:{self.platform}",
-             "raw": {"posted_at": self.posted_at, "has_media": self.has_media, "collected_at": collected_at, **self.extra}}
+             "external_id": self.external_id,
+             "source": f"collector:{self.platform}" + (f":{self.source_account}" if self.source_account else ""),
+             "raw": {"posted_at": self.posted_at, "has_media": self.has_media, "collected_at": collected_at, **self.extra,
+                     **({"source_account": "@" + self.source_account} if self.source_account else {})}}
         if collected_at: d["saved_at"] = collected_at
         if account_id: d["account_id"] = int(account_id)
         return d
@@ -72,8 +77,9 @@ class RunConfig:
     unsave_confirm: bool = False    # opt-in #2: without it unsave only LOGS what it would do (dry run)
     max_unsave: int = 50            # cap of real un-saves per run
     unsave_delay: float = 2.5       # seconds between un-saves
-    account_id: Optional[int] = None    # SaveHub account to link items to (or resolve account_handle)
-    account_handle: str = ""
+    account_id: Optional[int] = None    # SaveHub account row to link items to (default: resolved/created from account_handle)
+    account_handle: str = ""            # which logged-in account to collect from: selects session <platform>@<handle>.json,
+                                        # tags items source=collector:<platform>:<handle> and links them to that account row
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "RunConfig":

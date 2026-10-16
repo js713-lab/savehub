@@ -200,13 +200,16 @@ def test_push_to_savehub_and_search(browser, sessdir, savehub):
     r = httpx.post(base + "/api/accounts", json={"platform": "x", "handle": "@js_sample_me", "display_name": "Js"}, auth=(PW_USER, PW_PASS))
     acct = r.json()["id"]
     fake = FakeX(); sink = RestSink(base, PW_USER, PW_PASS)
+    (sessdir / "x@js_sample_me.json").write_text((sessdir / "x.json").read_text())     # per-account session
     s = runner.run_collect("x", RunConfig(**FAST, account_handle="@js_sample_me"), sink, sessdir, browser=browser, context_hook=fake.hook)
+    assert s["account"] == "@js_sample_me" and s["account_id"] == acct and s["session_file"].endswith("x@js_sample_me.json")
     assert (s["status"], s["collected"], s["created"], s["duplicates"], s["push_failed"]) == ("ok", 7, 7, 0, 0)
     assert s["unsave_mode"] == "off" and s["unsave"] == {} and fake.unbookmarked == []          # OFF by default
     assert all(i["confirmed"] for i in s["items"])
     items = api(base, "/api/items", params={"platform": "x", "limit": 50})["items"]
     assert {i["external_id"] for i in items} == set(IDS)
-    assert all(i["source"] == "collector:x" and i["account_id"] == acct for i in items)
+    assert all(i["source"] == "collector:x:js_sample_me" and i["account_id"] == acct for i in items)
+    assert api(base, "/api/items", params={"account_id": acct, "limit": 50})["total"] == 7                 # filterable by account
     hit = api(base, "/api/items", params={"q": "kopi spots"})
     assert hit["total"] == 1 and hit["items"][0]["author_handle"] == "KopiBot" and hit["items"][0]["media_url"]
     assert api(base, "/api/items", params={"q": "中文"})["total"] == 1                              # CJK search via FTS/LIKE
@@ -285,3 +288,167 @@ def test_login_command_saves_session(browser, tmp_path):
     with pytest.raises(NeedLogin, match="not detected"):        # a login page that never completes -> clear failure, nothing saved
         runner.run_login("x", tmp_path / "s2", timeout_s=3, browser=browser, context_hook=FakeX(logged_in=False).hook)
     assert not (tmp_path / "s2" / "x.json").exists()
+
+
+# ---------------------------------------------------------------- multi-account sessions + attribution
+def test_session_keys_per_account(tmp_path):
+    assert sessions.account_key("@Js_Main ") == "js_main" and sessions.account_key(None) == "default" == sessions.account_key("")
+    assert sessions.session_path("x", tmp_path, "@Js_Main").name == "x@js_main.json" and sessions.session_path("x", tmp_path).name == "x.json"
+    for bad in ("../etc", "a/b", "a b", "@"*2 + "x;rm"):
+        with pytest.raises(ValueError): sessions.account_key(bad)
+    for n in ("x@a.json", "x@b.json", "x.json", "instagram@food.json"): (tmp_path / n).write_text('{"cookies":[{"name":"c","value":"v","domain":".x.com","expires":-1}]}')
+    (tmp_path / "x@old.json").write_text('{"cookies":[{"name":"c","value":"SECRETVAL","domain":".x.com","expires":1000}]}')
+    got = {(s["platform"], s["account"]): s["status"] for s in sessions.list_sessions(tmp_path)}
+    assert got == {("x", "a"): "saved", ("x", "b"): "saved", ("x", "default"): "saved", ("instagram", "food"): "saved", ("x", "old"): "expired"}
+    assert [s["account"] for s in sessions.list_sessions(tmp_path, "instagram")] == ["food"]
+    assert "SECRETVAL" not in json.dumps(sessions.list_sessions(tmp_path))
+    with pytest.raises(NeedLogin, match=r"account @c.*login x --account @c"):
+        runner.run_collect("x", RunConfig(account_handle="@c"), None, tmp_path)
+
+
+def test_multi_account_attribution_sqlite(browser, sessdir, tmp_path):
+    """Two X accounts logged in at once: each run uses its own session file, auto-creates/links its account row and tags items."""
+    for h in ("alice", "bob"): (sessdir / f"x@{h}.json").write_text((sessdir / "x.json").read_text())
+    sink = SqliteSink(tmp_path / "multi.db")
+    from savehub import db
+    pre = db.add_account({"platform": "x", "handle": "@Alice", "display_name": "Alice main"})[0]       # existing dashboard row is reused
+    sa = runner.run_collect("x", RunConfig(**FAST, account_handle="@alice", max_items=3), sink, sessdir, browser=browser, context_hook=FakeX().hook)
+    sb = runner.run_collect("x", RunConfig(**FAST, account_handle="bob"), sink, sessdir, browser=browser, context_hook=FakeX().hook)
+    assert sa["account_id"] == pre and sa["created"] == 3 and sb["created"] == 4 and sb["duplicates"] == 3
+    bob = db.list_accounts("bob", "x")["accounts"][0]
+    assert bob["handle"] == "@bob" and bob["connected_via"] == "collector" and sb["account_id"] == bob["id"]
+    assert db.list_items(platforms=["x"], account_id=pre)["total"] == 3 and db.list_items(platforms=["x"], account_id=bob["id"])["total"] == 4
+    srcs = {r[0] for r in db.conn().execute("SELECT source FROM items WHERE platform='x' AND source LIKE 'collector:%'")}
+    assert srcs == {"collector:x:alice", "collector:x:bob"}
+    raw = json.loads(db.conn().execute("SELECT raw FROM items WHERE source='collector:x:bob' LIMIT 1").fetchone()[0])
+    assert raw["source_account"] == "@bob"
+
+
+def test_cli_login_and_sessions_per_account(tmp_path):
+    (tmp_path / "x@me.json").write_text('{"cookies":[]}')
+    r = subprocess.run([sys.executable, "-m", "savehub.collector", "--sessions-dir", str(tmp_path), "sessions", "x"], cwd=ROOT, capture_output=True, text=True)
+    assert r.returncode == 0 and json.loads(r.stdout)["sessions"][0]["account"] == "me"
+    r = subprocess.run([sys.executable, "-m", "savehub.collector", "--sessions-dir", str(tmp_path / "none"), "collect", "x", "--account", "@Zed", "--no-push"], cwd=ROOT, capture_output=True, text=True)
+    out = json.loads(r.stdout)
+    assert r.returncode == 2 and out["account"] == "@zed" and out["fix"] == "python -m savehub.collector login x --account @zed"
+
+
+# ---------------------------------------------------------------- MCP bridge: login_status / collect / list_platforms
+def arun(coro):
+    """asyncio.run in a fresh thread (the module's Playwright sync fixture owns this thread's event loop)."""
+    import asyncio, concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(1) as ex: return ex.submit(asyncio.run, coro).result()
+
+
+@pytest.fixture()
+def mcpmod(tmp_path, monkeypatch):
+    from savehub import db
+    c = getattr(db._local, "c", None)
+    if c is not None: c.close(); db._local.c = None
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "mcp.db")
+    monkeypatch.setenv("SAVEHUB_SESSIONS_DIR", str(tmp_path / "sess")); (tmp_path / "sess").mkdir()
+    for k in ("RENDER", "RENDER_EXTERNAL_HOSTNAME", "SAVEHUB_COLLECTOR"): monkeypatch.delenv(k, raising=False)
+    from savehub import mcp_server
+    yield mcp_server, tmp_path / "sess"
+    c = getattr(db._local, "c", None)
+    if c is not None: c.close(); db._local.c = None
+
+
+def _sess(d, name, expires=-1): (d / name).write_text(json.dumps({"cookies": [{"name": "auth_token", "value": "dummy-cookie-val", "domain": ".x.com", "path": "/", "expires": expires}], "origins": []}))
+
+
+def test_mcp_tools_signatures_and_no_secrets(mcpmod):
+    import asyncio, inspect
+    m, _ = mcpmod
+    tools = {t.name: t for t in arun(m.mcp.list_tools())}
+    assert list(tools["login_status"].inputSchema["properties"]) == ["platform", "account"]
+    assert list(tools["collect"].inputSchema["properties"]) == ["platform", "account", "max_items", "unsave"]
+    assert inspect.signature(m.collect).parameters["unsave"].default is False and tools["collect"].inputSchema["properties"]["unsave"]["default"] is False
+    for t in tools.values():
+        sch = json.dumps(t.inputSchema).lower()
+        assert not any(w in sch for w in ("password", "secret", "cookie", "token", "credential")), t.name
+
+
+def test_mcp_login_status_and_list_platforms(mcpmod):
+    import asyncio
+    m, d = mcpmod
+    r = m.login_status("x")
+    assert r["logged_in"] is False and r["accounts"] == [] and "python -m savehub.collector login x --account @<handle>" in r["fix"]
+    _sess(d, "x@alice.json"); _sess(d, "x@bob.json", expires=1000); _sess(d, "instagram@food.json")
+    from savehub import db
+    aid = db.add_account({"platform": "x", "handle": "@alice"})[0]
+    r = m.login_status("x")
+    acc = {a["account"]: a for a in r["accounts"]}
+    assert r["logged_in"] and acc["@alice"]["logged_in"] and acc["@alice"]["account_id"] == aid and acc["@bob"]["session"] == "expired"
+    assert "dummy-cookie-val" not in json.dumps(r)
+    r = m.login_status("x", "@bob"); assert not r["logged_in"] and "--account @bob" in r["fix"]
+    r = m.login_status("x", "@nobody"); assert r["accounts"][0]["session"] == "missing" and not r["logged_in"]
+    assert "error" in m.login_status("myspace") and "error" in m.login_status("x", "../../etc")
+    r = m.login_status("instagram"); assert r["collector_implemented"] is False and "not implemented" in r["note"]
+    lp = {p["id"]: p for p in m.list_platforms()["platforms"]}
+    assert lp["x"]["collector"]["supported"] and lp["x"]["collector"]["logged_in_accounts"] == 1
+    assert {a["account"] for a in lp["x"]["collector"]["accounts"]} == {"@alice", "@bob"}
+    assert lp["instagram"]["collector"]["implemented"] is False and lp["instagram"]["collector"]["accounts"][0]["account"] == "@food"
+    assert lp["web"]["collector"]["supported"] is False if "web" in lp else True
+    assert "available" in m.list_platforms()["collector_runtime"]
+
+
+def test_mcp_collect_guards(mcpmod, monkeypatch):
+    import asyncio
+    m, d = mcpmod
+    called = []
+    async def fake(cmd, timeout): called.append(cmd); return {"status": "ok"}
+    monkeypatch.setattr(m, "_run_collect_proc", fake)
+    t = time.time()
+    r = arun(m.collect("x")); assert r["status"] == "need_login" and "login x --account @<handle>" in r["error"]
+    r = arun(m.collect("x", "@zed")); assert r["status"] == "need_login" and "login x --account @zed" in r["error"]
+    assert arun(m.collect("tiktok"))["status"] == "not_implemented"
+    assert "unknown platform" in arun(m.collect("myspace"))["error"]
+    assert "max_items" in arun(m.collect("x", max_items=0))["error"]
+    _sess(d, "x@alice.json")
+    monkeypatch.setenv("RENDER", "true"); monkeypatch.setenv("SAVEHUB_COLLECTOR", "off")      # simulate Render (no browser)
+    r = arun(m.collect("x")); assert r["status"] == "browser_unavailable" and "Render" in r["error"]
+    monkeypatch.delenv("SAVEHUB_COLLECTOR"); monkeypatch.setattr(m.importlib.util, "find_spec", lambda n: None)
+    r = arun(m.collect("x")); assert r["status"] == "browser_unavailable" and "Playwright is not installed" in r["error"]
+    assert called == [] and time.time() - t < 5                                                  # nothing launched, no hang
+
+
+def test_mcp_collect_all_accounts_unsave_off_by_default(mcpmod, monkeypatch):
+    import asyncio
+    m, d = mcpmod
+    monkeypatch.setattr(m, "collector_runtime", lambda: {"available": True, "browser": "test"})
+    calls = []
+    async def fake(cmd, timeout):
+        calls.append(cmd); acct = cmd[cmd.index("--account") + 1] if "--account" in cmd else "default"
+        return {"status": "ok", "account": "@" + acct, "collected": 2, "created": 2, "duplicates": 0, "push_failed": 0, "session_file": "/x", "items": []}
+    monkeypatch.setattr(m, "_run_collect_proc", fake)
+    _sess(d, "x@alice.json"); _sess(d, "x@bob.json"); _sess(d, "x@old.json", expires=1000)
+    r = arun(m.collect("x"))
+    assert r["status"] == "ok" and r["accounts"] == 2 and r["created"] == 4 and r["unsave"] == "off" and r["skipped_accounts"] == ["@old"]
+    assert all("session_file" not in x for x in r["runs"])
+    assert [c[c.index("--account") + 1] for c in calls] == ["alice", "bob"]
+    assert not any("--unsave" in c or "--unsave-confirm" in c for c in calls)                    # OFF unless explicit
+    assert all(c[c.index("--sink") + 1] == "sqlite" for c in calls)
+    calls.clear(); r = arun(m.collect("x", "@bob", max_items=5, unsave=True))
+    assert r["unsave"] == "live" and len(calls) == 1 and calls[0][-5:] == ["bob", "--max-items", "5", "--unsave", "--unsave-confirm"]
+
+
+def test_mcp_collect_subprocess_env_and_timeout(mcpmod, monkeypatch):
+    import asyncio
+    m, _ = mcpmod
+    monkeypatch.setenv("SAVEHUB_DASHBOARD_PASSWORD", "pw-should-not-leak"); monkeypatch.setenv("SAVEHUB_VAULT_KEY", "k"); monkeypatch.setenv("GITHUB_TOKEN", "t")
+    env = m._child_env()
+    assert not {"SAVEHUB_DASHBOARD_PASSWORD", "SAVEHUB_VAULT_KEY", "GITHUB_TOKEN"} & set(env) and env["SAVEHUB_DB"] == str(m.db.DB_PATH)
+    t = time.time()
+    r = arun(m._run_collect_proc([sys.executable, "-c", "import time; time.sleep(60)"], 2))
+    assert r["status"] == "timeout" and time.time() - t < 10
+    r = arun(m._run_collect_proc([sys.executable, "-c", "print('{\"status\": \"ok\", \"collected\": 1}')"], 10))
+    assert r == {"status": "ok", "collected": 1, "exit_code": 0}
+
+
+def test_mcp_collect_real_subprocess_need_login(mcpmod, monkeypatch):
+    """End-to-end through the real collector CLI subprocess: an account whose session file vanished -> need_login JSON, quickly."""
+    import asyncio
+    m, d = mcpmod
+    r = arun(m._run_collect_proc(m._collect_cmd("x", "ghost", 3, False), 60))
+    assert r["status"] == "need_login" and r["exit_code"] == 2 and r["account"] == "@ghost"

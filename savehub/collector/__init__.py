@@ -4,7 +4,8 @@ Logs into a social app in a real Chromium (Playwright) using a saved session, sc
 saved/bookmarked items and pushes them into a SaveHub instance over its REST API (or a local SQLite DB).
 Optionally un-saves them on the app afterwards (OFF by default, dry-run by default).
 
-This package is never imported by the web server, so the Render image does not need Playwright.
+The web/MCP server only imports the registry + session metadata from here (never Playwright); MCP `collect` runs the
+CLI in a subprocess, so the Render image does not need Playwright (it reports the collector as unavailable).
 Run it with:  python -m savehub.collector --help
 """
 from .base import (Collector, CollectedItem, RunConfig, NeedLogin, CollectorError, NotImplementedPlatform,

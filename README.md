@@ -111,7 +111,7 @@ HTTP variant (clients that support streamable HTTP):
 ```json
 { "mcpServers": { "savehub": { "url": "http://127.0.0.1:8765/mcp", "headers": { "Authorization": "Bearer yourtoken" } } } }
 ```
-Tools: `search_items, list_items, get_item, add_item, tag_items, get_summary, list_platforms, import_file, search_contacts, sync_now, list_accounts, add_account, search_accounts`.
+Tools: `search_items, list_items, get_item, add_item, tag_items, get_summary, list_platforms, import_file, search_contacts, sync_now, list_accounts, add_account, search_accounts, login_status, collect` (the last two drive the browser collector, see below).
 
 ## Tests
 ```bash
@@ -161,9 +161,13 @@ If the bundled Chromium is missing, it falls back to a system Chrome/Chromium (o
 
 **1. Log in once** (opens a visible browser; needs a desktop/`DISPLAY`):
 ```bash
-.venv/bin/python -m savehub.collector login x          # log in by hand (2FA is fine); saved automatically once signed in
+.venv/bin/python -m savehub.collector login x --account @main_handle   # log in by hand (2FA is fine); saved automatically once signed in
+.venv/bin/python -m savehub.collector login x --account @alt_handle    # a second X account, logged in at the same time
 ```
-The session (cookies + localStorage, Playwright `storage_state`) is written to `data/sessions/x.json` (mode 0600, git-ignored;
+**Multiple accounts per platform:** each login is stored per (platform, account) as `data/sessions/<platform>@<handle>.json`
+(e.g. `x@main_handle.json`, `x@alt_handle.json`, `instagram@food.json`). Without `--account` the legacy single file
+`data/sessions/<platform>.json` is used (account `default`, items not linked to an account row).
+The session (cookies + localStorage, Playwright `storage_state`) is written to `data/sessions/` (mode 0600, git-ignored;
 change the folder with `--sessions-dir` or `SAVEHUB_SESSIONS_DIR`). **No password is stored.** The file works like a logged-in
 browser, so keep it private. Each run saves refreshed cookies back to it. `python -m savehub.collector sessions` lists saved sessions
 (metadata only).
@@ -176,9 +180,13 @@ export SAVEHUB_DASHBOARD_PASSWORD=...                  # dashboard login (user: 
 .venv/bin/python -m savehub.collector collect x --max-items 200 --account @myhandle
 ```
 Options: `--max-items` (default 200, hard cap per run), `--scroll-delay` (default 1.8 s + jitter, polite scrolling),
-`--headful`, `--account @handle` / `--account-id N` (link items to a SaveHub account), `--config run.json` (any `RunConfig`
+`--headful`, `--account @handle` (collect from that logged-in account's session, tag items with it and link them to its SaveHub
+account row, which is created with `connected_via=collector` if the dashboard has none) / `--account-id N` (link only), `--config run.json` (any `RunConfig`
 field, e.g. `{"max_items": 100, "unsave": true}`; CLI flags win), `--log-json` (structured logs on stderr). Items are stored as
-`platform=x`, `source=collector:x`, `external_id=<tweet id>`, post time and media flags in `raw`. Re-runs only add new items
+`platform=x`, `source=collector:x:<handle>` (`collector:x` for the default session), `account_id=<account row>`,
+`external_id=<tweet id>`, post time, media flags and `source_account` in `raw`. Filter by account with `account_id`
+(dashboard account filter, `GET /api/items?account_id=N`, MCP `list_items(account_id=N)`). An item saved by two of your
+accounts is stored once (de-dupe on platform+URL) and stays attributed to the account that collected it first. Re-runs only add new items
 (SaveHub de-dupes on platform+URL). The JSON result goes to stdout.
 
 Exit codes: `0` ok · `1` error · **`2` need login** (no session or it expired; the output names the session file and the `login` command to run) · `3` platform not implemented · `4` some pushes failed.
@@ -189,6 +197,19 @@ Exit codes: `0` ok · `1` error · **`2` need login** (no session or it expired;
 - `--unsave --unsave-confirm`: actually un-bookmarks. `--unsave-confirm` alone is refused, and `--no-push` with `--unsave` is refused.
 - An item is un-saved only after SaveHub confirms it (POST, then a read-back of the same platform+URL). Failed pushes are never un-saved.
 - At most `--max-unsave` (default 50) real un-saves per run, `unsave_delay` 2.5 s apart. Each one is verified (the bookmark toggle flips, or the Share menu no longer offers “Remove from Bookmarks”).
+
+**4. From your AI client (MCP):**
+- `login_status(platform, account=None)`: per-account session status (`saved` / `expired` / `missing` / `invalid`) and the linked
+  account row. Read-only; it never logs in. If nothing is saved it returns the box command to run (`login <platform> --account @<handle>`).
+- `collect(platform, account=None, max_items=None, unsave=False)`: runs the collector (as a subprocess using the SQLite sink, so
+  items go into the MCP server's own DB) for that account, or for **every logged-in account** of the platform when `account` is
+  omitted. `unsave` is off by default; only `unsave=true` un-saves on the real app (same confirmed-only rules, max 50 per run).
+  It returns an error right away when there is no session (`need_login`), the collector is a stub (`not_implemented`), or no
+  browser/Playwright is available (`browser_unavailable`, e.g. on Render). Runs are killed after `SAVEHUB_COLLECT_TIMEOUT`
+  seconds (default 900) per account. The subprocess gets no password, token or key env vars.
+- `list_platforms()` adds `collector` (supported, implemented, per-account sessions, logged_in_accounts) per platform and a
+  top-level `collector_runtime` (is a browser available here).
+No MCP tool takes or returns passwords, cookies or session contents.
 
 **Fragility:** this scrapes the web UI. When X changes its markup, selectors break. They all live in `SEL` in
 `savehub/collector/platforms/x.py`, and `tests/fixtures/x_bookmarks.html` mirrors the expected DOM. Automated use may hit
