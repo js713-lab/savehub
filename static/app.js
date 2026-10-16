@@ -9,10 +9,11 @@ const toast = (m, o = {}) => {
   requestAnimationFrame(() => t.classList.add('show'));
   t._h = setTimeout(() => t.classList.remove('show'), o.action ? 6000 : 3500);
 };
-const COLORS = {x:'#111',threads:'#333',instagram:'#d62976',facebook:'#1877f2',messenger:'#0084ff',whatsapp:'#25d366',wechat:'#07c160',tiktok:'#ff0050',douyin:'#161823',xiaohongshu:'#ff2442',web:'#6b7280'};
+const COLORS = {x:'#111',threads:'#333',instagram:'#d62976',facebook:'#0866ff',messenger:'#0084ff',whatsapp:'#25d366',wechat:'#07c160',tiktok:'#ff0050',douyin:'#161823',xiaohongshu:'#ff2442',web:'#6b7280'};
 let PLATFORMS = [], ACCOUNTS = [], VAULT = {enabled: false};
 const pname = id => (PLATFORMS.find(p => p.id === id) || {}).name || id;
-const pbadge = id => `<span class="pbadge" style="background:${COLORS[id] || '#555'}">${esc(pname(id))}</span>`;
+// Platform badge: real brand logo (static/logos/<id>.svg, from Simple Icons) on the brand colour + the platform name.
+const pbadge = id => `<span class="pbadge">${pmark(id, 'xs')}${esc(pname(id))}</span>`;
 const fdate = s => s ? new Date(s).toLocaleDateString(undefined, {year:'numeric', month:'short', day:'numeric'}) : '';
 let MODAL_RET = null, MODAL_ON_CLOSE = null;
 const modal = (html, cls = '', labelledby = '') => {
@@ -68,7 +69,7 @@ async function viewLibrary(params) {
     <button class="btn ghost" id="vt">${L.view === 'cards' ? '☰ Table' : '▦ Cards'}</button>
     <button class="btn" onclick="addLinkModal()">+ Add link</button>
   </div>
-  <div class="chips" id="pchips">${PLATFORMS.filter(p => p.enabled).map(p => `<span class="chip ${L.platforms.has(p.id)?'on':''}" data-p="${p.id}">${esc(p.name)}<span class="n">${p.count}</span></span>`).join('')}</div>
+  <div class="chips" id="pchips">${PLATFORMS.filter(p => p.enabled).map(p => `<span class="chip ${L.platforms.has(p.id)?'on':''}" data-p="${p.id}">${pmark(p.id, 'xs')}${esc(p.name)}<span class="n">${p.count}</span></span>`).join('')}</div>
   <div class="chips" id="tchips"><span class="muted small" style="align-self:center">Tags:</span>${tags.slice(0, 24).map(t => `<span class="chip ${L.tags.has(t.tag)?'on':''}" data-t="${esc(t.tag)}">#${esc(t.tag)}<span class="n">${t.n}</span></span>`).join('')}</div>
   <div class="row muted small" style="margin:6px 0 12px"><span id="count"></span><span style="flex:1"></span><button class="btn ghost small" onclick="retagAll()">↻ Re-run auto-tagging</button></div>
   <div id="results"></div>`;
@@ -140,7 +141,7 @@ async function viewSummary(params) {
   </div>
   <div class="panel" style="margin-top:14px"><h4>📝 Summary <span class="muted small">(${s.digest_by === 'local' ? 'template — no AI key set' : 'written by ' + esc(s.digest_by)})</span></h4><div class="digest">${esc(s.digest)}</div></div>
   <div class="cols" style="margin-top:14px">
-    <div class="panel"><h4>By platform</h4>${Object.entries(s.by_platform).map(([p, n]) => `<div class="barrow"><span>${esc(pname(p))}</span><div class="bar" style="width:${n/max*100}%;background:${['x','threads','douyin'].includes(p)?'#8b949e':(COLORS[p]||'var(--accent)')}"></div><b>${n}</b></div>`).join('') || '<span class="muted">—</span>'}</div>
+    <div class="panel"><h4>By platform</h4>${Object.entries(s.by_platform).map(([p, n]) => `<div class="barrow"><span class="tplat">${pmark(p, 'xs')}${esc(pname(p))}</span><div class="bar" style="width:${n/max*100}%;background:${['x','threads','douyin'].includes(p)?'#8b949e':(COLORS[p]||'var(--accent)')}"></div><b>${n}</b></div>`).join('') || '<span class="muted">—</span>'}</div>
     <div class="panel"><h4>Top tags</h4><div class="chips">${s.top_tags.map(([t, n]) => `<span class="tag">#${esc(t)} ${n}</span>`).join(' ')}</div>
       <h4 style="margin-top:14px">Top authors</h4>${s.top_authors.map(([a, n]) => `<div class="small">${esc(a)} <span class="muted">· ${n}</span></div>`).join('')}</div>
   </div>
@@ -152,7 +153,7 @@ const PMETA = {
   x:           {mark: 'X',  bg: '#000', at: true, ph: 'username', hint: 'Your X username, e.g. @jsyip'},
   threads:     {mark: '@',  bg: '#000', at: true, ph: 'username', hint: 'Usually the same as your Instagram username'},
   instagram:   {mark: 'IG', bg: 'linear-gradient(45deg,#f09433,#e6683c 25%,#dc2743 50%,#cc2366 75%,#bc1888)', at: true, ph: 'username'},
-  facebook:    {mark: 'f',  bg: '#1877f2', pre: 'fb.com/', ph: 'username or profile id'},
+  facebook:    {mark: 'f',  bg: '#0866ff', pre: 'fb.com/', ph: 'username or profile id'},
   messenger:   {mark: 'm',  bg: 'linear-gradient(45deg,#0099ff,#a033ff 60%,#ff5280)', pre: 'm.me/', ph: 'username'},
   whatsapp:    {mark: 'WA', bg: '#25d366', pre: 'tel', ph: '+60 12-345 6789', label: 'Phone number', hint: 'The phone number this WhatsApp account uses'},
   wechat:      {mark: '微', bg: '#07c160', pre: 'ID', ph: 'WeChat ID · 微信号', label: 'WeChat ID 微信号'},
@@ -162,7 +163,12 @@ const PMETA = {
   web:         {mark: 'www', bg: '#6b7280', ph: 'username', label: 'Username'},
 };
 const pm = id => PMETA[id] || {mark: String(id || '?').slice(0, 2).toUpperCase(), bg: '#555', ph: 'username'};
-const pmark = (id, size = '') => `<span class="pmark ${size} ${pm(id).fx || ''}" style="background:${pm(id).bg}" aria-hidden="true">${esc(pm(id).mark)}</span>`;
+const LOGOS = new Set(['x', 'threads', 'instagram', 'facebook', 'messenger', 'whatsapp', 'wechat', 'tiktok', 'douyin', 'xiaohongshu', 'web']);
+const logoImg = id => `<img class="plogo" src="/static/logos/${id}.svg" alt="" width="24" height="24" decoding="async" draggable="false">`;
+// Brand mark: white brand logo on the platform colour (falls back to the letter mark for unknown platforms).
+const pmark = (id, size = '') => LOGOS.has(id)
+  ? `<span class="pmark ${size} haslogo" data-logo="${id}" style="background:${pm(id).bg}" aria-hidden="true">${logoImg(id)}</span>`
+  : `<span class="pmark ${size} ${pm(id).fx || ''}" style="background:${pm(id).bg}" aria-hidden="true">${esc(pm(id).mark)}</span>`;
 const PURL = {x: h => `https://x.com/${h}`, threads: h => `https://www.threads.net/@${h}`, instagram: h => `https://www.instagram.com/${h}/`,
   facebook: h => `https://www.facebook.com/${h}`, messenger: h => `https://m.me/${h}`, tiktok: h => `https://www.tiktok.com/@${h}`,
   whatsapp: h => { const d = h.replace(/\D/g, ''); return d.length >= 7 ? `https://wa.me/${d}` : ''; }};
@@ -179,7 +185,7 @@ const initials = s => {
   const second = w[1] && !cjk([...w[1]][0]) ? [...w[1]][0] : ([...w[0]].find((c, i) => i > 0 && !cjk(c)) || '');
   return (f + second).toUpperCase();
 };
-const avatar = (a, big) => { const n = a.display_name || a.handle; return `<span class="avatar ${big ? 'big' : ''}" style="--h:${hue(n)}" aria-hidden="true">${esc(initials(n))}<i class="pdot" style="background:${pm(a.platform).bg}"></i></span>`; };
+const avatar = (a, big) => { const n = a.display_name || a.handle; return `<span class="avatar ${big ? 'big' : ''}" style="--h:${hue(n)}" aria-hidden="true">${esc(initials(n))}<i class="pdot" data-logo="${esc(a.platform)}" style="background:${pm(a.platform).bg}" title="${esc(pname(a.platform))}">${LOGOS.has(a.platform) ? logoImg(a.platform) : ''}</i></span>`; };
 const IC = {
   edit: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
   trash: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>',
