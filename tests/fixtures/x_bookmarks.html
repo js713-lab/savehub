@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<!-- Synthetic, trimmed copy of the x.com/i/bookmarks DOM shape (data-testid attributes as used by X in 2026).
+     All people/handles/text are fictional. Infinite scroll + list virtualisation are simulated by the script below. -->
+<html dir="ltr" lang="en"><head><meta charset="utf-8"><title>Bookmarks / X</title>
+<style>body{margin:0;font-family:sans-serif} .cell{min-height:420px;border-bottom:1px solid #ccc;padding:8px} header{position:fixed;left:0;width:200px}</style></head>
+<body><div id="react-root"><div class="css-175oi2r r-13awgt0 r-12vffkv">
+<header role="banner" class="css-175oi2r"><nav aria-label="Primary role" role="navigation">
+  <a href="/home" aria-label="Home" role="link" data-testid="AppTabBar_Home_Link"><span>Home</span></a>
+  <a href="/i/bookmarks" aria-label="Bookmarks" role="link"><span>Bookmarks</span></a>
+  <a href="/compose/post" data-testid="SideNav_NewTweet_Button" role="link"><span>Post</span></a>
+  <button data-testid="SideNav_AccountSwitcher_Button" aria-label="Account menu"><span>Js Sample</span><span>@js_sample_me</span></button>
+</nav></header>
+<main role="main" class="css-175oi2r" style="margin-left:220px"><div data-testid="primaryColumn">
+ <div aria-label="Home timeline"><h2 role="heading"><span>Bookmarks</span></h2>
+ <section role="region" aria-labelledby="accessible-list-1"><h1 id="accessible-list-1">Your Bookmarks</h1>
+  <div aria-label="Timeline: Bookmarks"><div id="list" style="position:relative"></div></div>
+ </section></div>
+</div></main></div></div>
+<script>
+const T = [
+ {id:"1840000000000000001", name:"Ada Sample", h:"ada_sample", t:"2026-10-10T08:15:00.000Z", text:"Thread on <b>SQLite FTS5</b> trigram tokenizers: substring search for 中文 works out of the box 🧵", photo:false},
+ {id:"1840000000000000002", name:"Kopi Bot 🇲🇾", h:"KopiBot", t:"2026-10-11T02:00:00.000Z", text:"Best kopi spots in Kuala Lumpur, ranked.", photo:true, img:"https://pbs.twimg.com/media/SAMPLEkopi.jpg?format=jpg&name=small"},
+ {id:"1840000000000000003", name:"Dev Notes", h:"devnotes", t:"2026-10-12T11:30:00.000Z", text:"Playwright tip: use storage_state to reuse a login.", video:true, social:"Ada Sample reposted"},
+ {id:"1840000000000000004", name:"Quote Person", h:"quoter", t:"2026-10-13T09:00:00.000Z", text:"This is exactly right 👇", quote:{id:"1830000000000000099", name:"Inner Author", h:"inner_author", t:"2025-01-01T00:00:00.000Z", text:"Quoted tweet text must not leak into the outer tweet."}},
+ {promoted:true, name:"Some Brand", h:"brand", text:"Buy our thing (Promoted)"},
+ {id:"1840000000000000002", name:"Kopi Bot 🇲🇾", h:"KopiBot", t:"2026-10-11T02:00:00.000Z", text:"Best kopi spots in Kuala Lumpur, ranked.", photo:true, img:"https://pbs.twimg.com/media/SAMPLEkopi.jpg?format=jpg&name=small"},
+ {id:"1840000000000000005", name:"Nasi Lemak Daily", h:"nasilemak_daily", t:"2026-10-14T00:45:00.000Z", text:"Line one\nLine two with a link example.com/very-long-pa…", card:true},
+ {id:"1840000000000000006", name:"Photo Dump", h:"photodump", t:"2026-10-15T05:05:00.000Z", text:"", photo:true, img:"https://pbs.twimg.com/media/SAMPLEphoto.jpg"},
+ {id:"1840000000000000007", name:"Last One", h:"last_one", t:"2026-10-16T01:00:00.000Z", text:"End of the bookmarks list."},
+];
+function userName(x){ return `<div data-testid="User-Name" class="css-175oi2r r-1wbh5a2"><div class="css-175oi2r"><a href="/${x.h}" role="link" class="css-175oi2r"><div dir="ltr"><span class="css-1jxf684"><span>${x.name.replace("🇲🇾",'<img alt="🇲🇾" draggable="false" src="https://abs-0.twimg.com/emoji/v2/svg/1f1f2-1f1fe.svg">')}</span></span></div></a></div>
+  <div class="css-175oi2r"><a href="/${x.h}" role="link" tabindex="-1"><div dir="ltr"><span>@${x.h}</span></div></a><span>·</span>
+  ${x.t?`<a href="/${x.h}/status/${x.id}" dir="ltr" role="link" aria-label="${x.t}"><time datetime="${x.t}">Oct 1</time></a>`:''}</div></div>`; }
+function card(x){
+  if (x.promoted) return `<article aria-labelledby="p" role="article" tabindex="0" data-testid="tweet"><div>${userName(x)}<div data-testid="tweetText" lang="en"><span>${x.text}</span></div><div><span>Ad</span></div></div></article>`;
+  const q = x.quote ? `<div tabindex="0" role="link" class="css-175oi2r r-adacv"><div>${userName(x.quote).replace(/<a href="[^"]*status[^"]*"[^>]*>(<time[^<]*<\/time>)<\/a>/, "$1")}<div data-testid="tweetText" lang="en"><span>${x.quote.text}</span></div></div></div>` : "";
+  const text = x.text ? `<div data-testid="tweetText" lang="en" dir="auto"><span>${x.text.split("\n").join("</span><br><span>").replace("🧵",'</span><img alt="🧵" draggable="false" src="https://abs-0.twimg.com/emoji/v2/svg/1f9f5.svg"><span>').replace("👇",'</span><img alt="👇" src="https://abs-0.twimg.com/emoji/v2/svg/1f447.svg"><span>')}</span></div>` : "";
+  return `<article aria-labelledby="id__${x.id}" role="article" tabindex="0" data-testid="tweet"><div class="css-175oi2r">
+   ${x.social?`<div><span data-testid="socialContext">${x.social}</span></div>`:''}
+   <div data-testid="Tweet-User-Avatar"><img alt="" src="https://pbs.twimg.com/profile_images/SAMPLE_normal.jpg"></div>
+   ${userName(x)}${text}
+   ${x.photo?`<div aria-labelledby="m"><a href="/${x.h}/status/${x.id}/photo/1" role="link"><div data-testid="tweetPhoto"><img alt="Image" src="${x.img}"></div></a></div>`:''}
+   ${x.video?`<div data-testid="videoComponent"><div data-testid="videoPlayer"><video preload="none"></video></div></div>`:''}
+   ${x.card?`<div data-testid="card.wrapper"><a href="https://t.co/SAMPLE" role="link"><img src="https://pbs.twimg.com/card_img/SAMPLE.jpg"></a></div>`:''}
+   ${q}
+   <div role="group" aria-label="replies, reposts, likes, bookmarks">
+     <button data-testid="reply" aria-label="Reply"></button><button data-testid="retweet" aria-label="Repost"></button>
+     <button data-testid="like" aria-label="Like"></button>
+     <button data-testid="removeBookmark" aria-label="Bookmarked"></button>
+     <button data-testid="share" aria-label="Share post"></button></div></div></article>`;
+}
+// simulate X: render 4 cells; when the user scrolls near the end append the next 2 and drop cells far above (virtualisation)
+const list = document.getElementById("list"); let next = 0;
+function more(n){ for (let i = 0; i < n && next < T.length; i++, next++) { const d = document.createElement("div");
+  d.setAttribute("data-testid","cellInnerDiv"); d.className = "cell"; d.innerHTML = card(T[next]); list.appendChild(d); }
+  while (list.children.length > 5) list.removeChild(list.firstChild); }
+more(4);
+window.addEventListener("scroll", () => { if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 300) setTimeout(() => more(2), 150); });
+</script></body></html>

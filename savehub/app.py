@@ -1,5 +1,5 @@
 """SaveHub web app + REST API."""
-import os
+import os, re
 from typing import Optional
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -42,7 +42,10 @@ async def add_item(req: Request):
     d = await req.json()
     if not d.get("url") and not d.get("content"): raise HTTPException(400, "url or content required")
     if d.get("url") and not d.get("platform"): d["platform"] = importers.detect_platform(d["url"])
-    d.setdefault("title", d.get("url")); d["source"] = "manual"
+    d.setdefault("title", d.get("url"))
+    # browser collectors tag their pushes as "collector:<platform>"; anything else is a manual add
+    src = str(d.get("source") or "")
+    d["source"] = src if re.fullmatch(r"collector:[a-z0-9_]{1,32}", src) else "manual"
     iid, created = db.add_item(d)
     return {"id": iid, "created": created, "item": db.get_item(iid)}
 

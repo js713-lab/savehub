@@ -66,7 +66,7 @@ How it works: one uvicorn process binds `0.0.0.0:$PORT`. `/mcp` goes to the MCP 
 | WeChat / 抖音 / 小红书 | No export of favourites — paste share text/links (share-text boilerplate stripped), or CSV / JSON / HTML link list |
 | Web | Add link, paste links, browser bookmarks HTML (Netscape format) |
 
-None of the non-X apps offer a public API for personal saved items; SaveHub does not scrape them.
+None of the non-X apps offer a public API for personal saved items. The server never scrapes them; the optional, **local-only** browser collector below can (X implemented, others stubbed).
 
 ## Env vars
 | Var | Purpose |
@@ -120,13 +120,14 @@ Tools: `search_items, list_items, get_item, add_item, tag_items, get_summary, li
 .venv/bin/python tests/mcp_client_test.py            # every MCP tool over stdio (temp DB) + HTTP at $SAVEHUB_MCP_URL (default :8765/mcp)
 .venv/bin/python tests/combined_server_test.py       # boots combined server on PORT=8900 with a fresh DB: /healthz, dashboard, REST, MCP auth/hosts/tools
 .venv/bin/python tests/screenshots.py                # headless screenshots → screenshots/
+.venv/bin/python -m pytest -q tests/collector_test.py   # browser collector: X parser on HTML fixtures, scroll/de-dupe, login detection, push to a temp SaveHub, unsave safety
 ```
 
 ## Sample data
 30 items, 7 accounts, 6 contacts — all fictional and flagged `is_sample` (shown with a **SAMPLE** badge). “Clear sample data” in the banner/Settings deletes only those rows. Example import files live in `samples/`.
 
 ## Layout
-`savehub/db.py` storage+FTS · `tagger.py` AI/local tagging · `importers.py` · `summary.py` · `sync.py` (Notion/Drive) · `xoauth.py` · `app.py` REST API · `mcp_server.py` · `server.py` (combined single-port) · `seed.py` · `static/` UI
+`savehub/db.py` storage+FTS · `tagger.py` AI/local tagging · `importers.py` · `summary.py` · `sync.py` (Notion/Drive) · `xoauth.py` · `app.py` REST API · `mcp_server.py` · `server.py` (combined single-port) · `seed.py` · `static/` UI · `collector/` local browser collector (not used by the server)
 
 ## 🔐 Encrypted password vault (optional)
 Each account can optionally hold its login password, **encrypted at rest**.
@@ -137,3 +138,58 @@ Each account can optionally hold its login password, **encrypted at rest**.
 - **Not exposed via MCP** (no tool accepts or returns passwords) and **never included in CSV export**.
 - ⚠️ **Render free tier has no persistent disk**: the DB — including saved passwords — is wiped on every restart/redeploy/idle spin-down. Attach a persistent disk (paid) and set `SAVEHUB_PERSISTENT_DISK=1`. Losing `SAVEHUB_VAULT_KEY` makes saved passwords unrecoverable.
 
+
+## 🕸️ Browser collector (local / self-hosted only)
+`savehub.collector` opens the app in a real Chromium (Playwright) **as you**, using a saved login session, scrolls your
+**saved / bookmarked** items, and pushes them into SaveHub. It can optionally un-save them on the app afterwards.
+
+**Why local-only:** Render's free tier has no browser and no persistent disk, so the collector does not run there. Run it on
+any machine with Chromium (this box, your laptop). By default it **pushes to a SaveHub instance over the REST API**, so it works
+against the live Render site as well as a local server. `--sink sqlite --db path` writes straight into a local SQLite DB instead.
+⚠️ On Render free, pushed items are lost when the instance restarts or redeploys (ephemeral DB). Export them, or point the collector at a SaveHub that keeps its data.
+
+| Platform | Collector |
+|---|---|
+| X (Twitter) | ✅ `x.com/i/bookmarks`: author, @handle, text (emoji kept), permalink, post time, media flag/first image, repost/quote context; de-duped by tweet id; optional un-bookmark |
+| Instagram, Threads, Facebook, TikTok, 抖音, 小红书, WeChat, WhatsApp, Messenger | ⏳ stubs (`savehub/collector/platforms/stubs.py`) that raise a clear *not implemented* error. Each has TODO notes on its saved-items URL and selectors. `python -m savehub.collector platforms` lists them |
+
+**Install** (kept out of `requirements.txt` so the Render image stays slim):
+```bash
+.venv/bin/pip install -r requirements-collector.txt && .venv/bin/playwright install chromium
+```
+If the bundled Chromium is missing, it falls back to a system Chrome/Chromium (or `$SAVEHUB_CHROME`).
+
+**1. Log in once** (opens a visible browser; needs a desktop/`DISPLAY`):
+```bash
+.venv/bin/python -m savehub.collector login x          # log in by hand (2FA is fine); saved automatically once signed in
+```
+The session (cookies + localStorage, Playwright `storage_state`) is written to `data/sessions/x.json` (mode 0600, git-ignored;
+change the folder with `--sessions-dir` or `SAVEHUB_SESSIONS_DIR`). **No password is stored.** The file works like a logged-in
+browser, so keep it private. Each run saves refreshed cookies back to it. `python -m savehub.collector sessions` lists saved sessions
+(metadata only).
+
+**2. Collect:**
+```bash
+export SAVEHUB_URL=https://<service>.onrender.com      # default http://127.0.0.1:8765
+export SAVEHUB_DASHBOARD_PASSWORD=...                  # dashboard login (user: SAVEHUB_DASHBOARD_USER, default savehub)
+.venv/bin/python -m savehub.collector collect x --no-push --max-items 20   # scrape only, print items
+.venv/bin/python -m savehub.collector collect x --max-items 200 --account @myhandle
+```
+Options: `--max-items` (default 200, hard cap per run), `--scroll-delay` (default 1.8 s + jitter, polite scrolling),
+`--headful`, `--account @handle` / `--account-id N` (link items to a SaveHub account), `--config run.json` (any `RunConfig`
+field, e.g. `{"max_items": 100, "unsave": true}`; CLI flags win), `--log-json` (structured logs on stderr). Items are stored as
+`platform=x`, `source=collector:x`, `external_id=<tweet id>`, post time and media flags in `raw`. Re-runs only add new items
+(SaveHub de-dupes on platform+URL). The JSON result goes to stdout.
+
+Exit codes: `0` ok · `1` error · **`2` need login** (no session or it expired; the output names the session file and the `login` command to run) · `3` platform not implemented · `4` some pushes failed.
+
+**3. Un-save safety (OFF by default):**
+- No flag: nothing on the app is touched.
+- `--unsave`: **dry run**. It logs and lists each item it *would* un-bookmark and never opens or clicks them.
+- `--unsave --unsave-confirm`: actually un-bookmarks. `--unsave-confirm` alone is refused, and `--no-push` with `--unsave` is refused.
+- An item is un-saved only after SaveHub confirms it (POST, then a read-back of the same platform+URL). Failed pushes are never un-saved.
+- At most `--max-unsave` (default 50) real un-saves per run, `unsave_delay` 2.5 s apart. Each one is verified (the bookmark toggle flips, or the Share menu no longer offers “Remove from Bookmarks”).
+
+**Fragility:** this scrapes the web UI. When X changes its markup, selectors break. They all live in `SEL` in
+`savehub/collector/platforms/x.py`, and `tests/fixtures/x_bookmarks.html` mirrors the expected DOM. Automated use may hit
+rate limits, captchas or account checks. Keep runs small and infrequent, and use your own account only, at your own risk under the app's terms.

@@ -1,0 +1,4 @@
+# Local browser collector only (NOT needed for the web server / Render image).
+#   pip install -r requirements-collector.txt && playwright install chromium
+-r requirements.txt
+playwright>=1.45

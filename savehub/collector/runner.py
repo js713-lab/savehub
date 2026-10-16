@@ -1,0 +1,140 @@
+"""Orchestrates a collect run: browser + saved session -> collector -> sink -> (optional) un-save."""
+from __future__ import annotations
+import contextlib, logging, os, shutil, time
+from datetime import datetime, timezone
+from pathlib import Path
+from .base import CollectorError, NeedLogin, NotImplementedPlatform, RunConfig, get_collector
+from .logutil import ev
+from . import sessions
+
+SYSTEM_CHROMES = ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]
+LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
+
+
+def _require_playwright():
+    try:
+        from playwright.sync_api import sync_playwright
+        return sync_playwright
+    except ImportError:
+        raise CollectorError("Playwright is not installed. Run: pip install -r requirements-collector.txt && playwright install chromium") from None
+
+
+def launch_browser(pw, headful=False):
+    """Bundled Playwright Chromium first; fall back to a system Chrome/Chromium (or $SAVEHUB_CHROME)."""
+    args = LAUNCH_ARGS + (["--no-sandbox"] if hasattr(os, "geteuid") and os.geteuid() == 0 else [])
+    if headful and not os.environ.get("DISPLAY") and os.name == "posix" and not os.uname().sysname == "Darwin":
+        raise CollectorError("--headful/login needs a display (DISPLAY is not set). Run it on a desktop session.")
+    exe = os.environ.get("SAVEHUB_CHROME")
+    if exe: return pw.chromium.launch(executable_path=exe, headless=not headful, args=args)
+    try:
+        return pw.chromium.launch(headless=not headful, args=args)
+    except Exception as e:
+        if "Executable doesn't exist" not in str(e) and "executable" not in str(e).lower(): raise
+        for c in SYSTEM_CHROMES:
+            if shutil.which(c) or os.path.exists(c):
+                ev("browser.fallback", executable=c); return pw.chromium.launch(executable_path=c, headless=not headful, args=args)
+        raise CollectorError("No Chromium found. Run: playwright install chromium") from e
+
+
+def new_context(browser, storage_state=None):
+    tmp = browser.new_page(); ua = tmp.evaluate("navigator.userAgent"); tmp.context.close()
+    # drop the "HeadlessChrome" token some sites block
+    return browser.new_context(storage_state=storage_state, user_agent=ua.replace("HeadlessChrome", "Chrome"),
+                               viewport={"width": 1280, "height": 1000}, locale="en-US")
+
+
+def run_collect(platform: str, cfg: RunConfig, sink=None, sessions_dir=None, browser=None, context_hook=None) -> dict:
+    """Run one collection. `sink=None` = scrape only (no push, therefore no un-save).
+    `browser` / `context_hook(ctx)` let tests inject a browser and route network to fixtures."""
+    col = get_collector(platform)
+    if not col.implemented: col.collect(None, cfg)          # raises NotImplementedPlatform with the TODO
+    sfile = sessions.session_path(platform, sessions_dir)
+    if not sfile.exists(): raise NeedLogin(platform, sfile, "no saved session file")
+    if cfg.unsave and sink is None: raise CollectorError("--unsave needs a sink (it only un-saves items confirmed stored in SaveHub)")
+    started = time.time(); collected_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    summary = {"platform": platform, "status": "ok", "session_file": str(sfile), "unsave_mode": cfg.unsave_mode,
+               "collected": 0, "created": 0, "duplicates": 0, "push_failed": 0, "unsave": {}, "items": []}
+    ev("run.start", platform=platform, max_items=cfg.max_items, unsave=cfg.unsave_mode, sink=getattr(sink, "kind", "none"))
+    if sink is not None:
+        h = sink.check(); ev("savehub.ok", items=(h.get("stats") or {}).get("items"))
+        if cfg.account_id is None and cfg.account_handle:
+            cfg.account_id = sink.resolve_account(platform, cfg.account_handle)
+            if cfg.account_id is None: ev("account.not_found", logging.WARNING, handle=cfg.account_handle, note="items stored without account link")
+            else: ev("account.resolved", handle=cfg.account_handle, account_id=cfg.account_id)
+    with contextlib.ExitStack() as stack:
+        if browser is None:
+            pw = stack.enter_context(_require_playwright()())
+            browser = launch_browser(pw, cfg.headful); stack.callback(browser.close)
+        ctx = new_context(browser, str(sfile)); stack.callback(ctx.close)
+        if context_hook: context_hook(ctx)
+        page = ctx.new_page(); page.set_default_timeout(cfg.page_timeout_ms)
+        items = col.collect(page, cfg, sfile)
+        summary["collected"] = len(items)
+        ev("collect.done", count=len(items))
+        results = []
+        if sink is not None:
+            for it in items:
+                r = sink.push(it, cfg.account_id, collected_at); results.append(r)
+                if r.error: summary["push_failed"] += 1; ev("push.failed", logging.WARNING, url=it.url, error=r.error)
+                elif r.created: summary["created"] += 1
+                else: summary["duplicates"] += 1
+        summary["items"] = [{"url": it.url, "author_handle": it.author_handle, "posted_at": it.posted_at,
+                             "has_media": it.has_media, "text": it.text[:140],
+                             **({"savehub_id": r.id, "created": r.created, "confirmed": r.confirmed} if r else {})}
+                            for it, r in zip(items, results or [None] * len(items))]
+        if cfg.unsave:
+            summary["unsave"] = _unsave(col, page, [r for r in results if r.confirmed and not r.error], cfg, sfile)
+        sessions.save_state(ctx, sfile)                       # keep refreshed cookies for next run
+    summary["elapsed_s"] = round(time.time() - started, 1)
+    ev("run.done", **{k: v for k, v in summary.items() if k not in ("items",)})
+    return summary
+
+
+def _unsave(col, page, confirmed, cfg, sfile) -> dict:
+    """Only items confirmed stored in SaveHub reach here. Dry run unless cfg.unsave_confirm."""
+    out = {"mode": cfg.unsave_mode, "would_unsave": [], "unsaved": [], "already_unsaved": [], "failed": [], "skipped_cap": 0}
+    for i, r in enumerate(confirmed):
+        url = r.item.url
+        if not cfg.unsave_confirm:
+            out["would_unsave"].append(url); ev("unsave.dry_run", url=url, savehub_id=r.id, note="pass --unsave-confirm to actually un-save")
+            continue
+        if len(out["unsaved"]) + len(out["failed"]) >= cfg.max_unsave:
+            out["skipped_cap"] = len(confirmed) - i; ev("unsave.cap_reached", max_unsave=cfg.max_unsave); break
+        try: st = col.unsave(page, r.item, cfg, sfile)
+        except NeedLogin: raise
+        except Exception as e: st = "failed"; ev("unsave.error", logging.WARNING, url=url, error=str(e)[:200])
+        out[st].append(url); ev("unsave." + st, url=url, savehub_id=r.id)
+        page.wait_for_timeout(int(1000 * cfg.unsave_delay))
+    return out
+
+
+def run_login(platform: str, sessions_dir=None, timeout_s: int = 600, wait_enter: bool = False, browser=None, context_hook=None) -> dict:
+    """Open a HEADFUL browser at the platform's login page so a human can log in; save storage_state when done.
+    Finishes when the collector detects a signed-in session (or Enter is pressed with wait_enter)."""
+    col = get_collector(platform)
+    if not col.implemented: col.is_logged_in(None)           # raises NotImplementedPlatform
+    sfile = sessions.session_path(platform, sessions_dir)
+    with contextlib.ExitStack() as stack:
+        if browser is None:
+            pw = stack.enter_context(_require_playwright()())
+            browser = launch_browser(pw, headful=True); stack.callback(browser.close)
+        ctx = new_context(browser, str(sfile) if sfile.exists() else None); stack.callback(ctx.close)
+        if context_hook: context_hook(ctx)
+        page = ctx.new_page()
+        page.goto(col.login_url or col.home_url, wait_until="domcontentloaded")
+        ev("login.waiting", platform=platform, url=page.url, timeout_s=timeout_s,
+           note="log in in the opened browser window (2FA ok); the session is saved automatically")
+        deadline, ok = time.time() + timeout_s, False
+        if wait_enter:
+            input("Press Enter here after you have logged in... ")
+            ok = col.is_logged_in(page)
+        else:
+            while time.time() < deadline:
+                if col.is_logged_in(page): ok = True; break
+                page.wait_for_timeout(2000)
+        if not ok:
+            raise NeedLogin(platform, sfile, "login not detected before timeout; nothing saved")
+        page.wait_for_timeout(3000)                            # let the app finish setting cookies
+        sessions.save_state(ctx, sfile)
+    ev("login.saved", platform=platform, session_file=str(sfile))
+    return {"platform": platform, "status": "logged_in", **sessions.describe(sfile)}

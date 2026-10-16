@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<!-- Synthetic x.com/<handle>/status/<id> page. The test route fills {{ID}}, {{H}}, {{BM}} (removeBookmark|bookmark),
+     {{VARIANT}} (direct = bookmark toggle in the action bar, menu = only via the Share menu). Fictional content. -->
+<html lang="en"><head><meta charset="utf-8"><title>Post / X</title></head>
+<body><div id="react-root">
+<nav role="navigation"><a href="/home" data-testid="AppTabBar_Home_Link">Home</a></nav>
+<main role="main"><div data-testid="primaryColumn"><section aria-labelledby="c"><div aria-label="Timeline: Conversation">
+ <div data-testid="cellInnerDiv"><article role="article" tabindex="-1" data-testid="tweet">
+   <div data-testid="User-Name"><a href="/{{H}}" role="link"><span>Someone</span></a><a href="/{{H}}" role="link"><span>@{{H}}</span></a></div>
+   <div data-testid="tweetText"><span>Detail view of {{ID}}</span></div>
+   <a href="/{{H}}/status/{{ID}}" role="link"><time datetime="2026-10-10T08:15:00.000Z">8:15 AM · Oct 10, 2026</time></a>
+   <div role="group" id="bar"></div>
+ </article></div>
+ <div data-testid="cellInnerDiv"><article role="article" data-testid="tweet">
+   <div data-testid="User-Name"><a href="/replier"><span>Replier</span></a><a href="/replier"><span>@replier</span></a></div>
+   <a href="/replier/status/1999999999999999999"><time datetime="2026-10-11T00:00:00.000Z">Oct 11</time></a>
+   <div role="group"><button data-testid="removeBookmark" aria-label="Bookmarked"></button></div></article></div>
+</div></section></div></main>
+<div id="layers"></div>
+<script>
+const ID = "{{ID}}", VARIANT = "{{VARIANT}}"; let bm = "{{BM}}" === "removeBookmark";
+const bar = document.getElementById("bar"), layers = document.getElementById("layers");
+function report(){ fetch("/__test/unbookmark?id=" + ID, {method: "POST"}); }
+function render(){
+  bar.innerHTML = `<button data-testid="reply"></button><button data-testid="like"></button>` +
+    (VARIANT === "direct" ? `<button data-testid="${bm ? "removeBookmark" : "bookmark"}" aria-label="${bm ? "Bookmarked" : "Bookmark"}"></button>` : "") +
+    `<button data-testid="share" aria-label="Share post"></button>`;
+  const b = bar.querySelector('[data-testid="removeBookmark"]');
+  if (b) b.onclick = () => { bm = false; report(); render(); };
+  bar.querySelector('[data-testid="share"]').onclick = () => {
+    layers.innerHTML = `<div role="menu"><div role="menuitem">Copy link</div>` +
+      (bm ? `<div role="menuitem" id="rm">Remove from Bookmarks</div>` : `<div role="menuitem">Bookmark</div>`) + `</div>`;
+    const rm = document.getElementById("rm"); if (rm) rm.onclick = () => { bm = false; layers.innerHTML = '<div role="alert">Removed from your Bookmarks</div>'; report(); };
+  };
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape") layers.innerHTML = ""; });
+render();
+</script></body></html>
