@@ -2,9 +2,9 @@
 import os
 from typing import Optional
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from . import db, importers, summary, sync, tagger, xoauth
+from . import auth, db, importers, summary, sync, tagger, vault, xoauth
 
 app = FastAPI(title="SaveHub", version="1.0")
 STATIC = db.ROOT / "static"
@@ -97,7 +97,10 @@ def del_contact(cid: int): db.delete_contact(cid); return {"ok": True}
 # ---- accounts ----
 @app.get("/api/accounts")
 def accounts(q: str = "", platform: str = "", status: str = "", sort: str = "platform", order: str = "asc", limit: int = 500, offset: int = 0):
-    return db.list_accounts(q, _csv(platform) or None, status or None, sort, order, limit, offset)
+    r = db.list_accounts(q, _csv(platform) or None, status or None, sort, order, limit, offset)
+    sec = vault.ids_with_secret()   # only a boolean + timestamp; never the ciphertext or plaintext
+    for a in r["accounts"]: a["has_password"] = a["id"] in sec; a["password_updated_at"] = sec.get(a["id"])
+    return r
 
 @app.post("/api/accounts")
 async def add_account(req: Request):
@@ -132,7 +135,41 @@ def account_stats():
 
 @app.put("/api/accounts/{aid}")
 async def put_account(aid: int, req: Request):
-    db.update_account(aid, await req.json()); return db.get_account(aid)
+    d = await req.json()
+    if any("password" in k.lower() or "secret" in k.lower() for k in d): raise HTTPException(400, "Passwords go through the encrypted vault: PUT /api/accounts/{id}/secret")
+    db.update_account(aid, d); return db.get_account(aid)
+
+# ---- encrypted password vault (dashboard only; never exposed via MCP) ----
+NO_STORE = {"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"}
+
+def _vault_guard(req: Request):
+    """Secrets endpoints: require a logged-in dashboard user (HTTP Basic verified here, not only by the dispatcher),
+    a JSON request (forces a CORS preflight cross-site) and a same-origin Origin header when one is sent."""
+    if not auth.login_configured(): raise HTTPException(503, "Password vault is off: dashboard login is not configured (SAVEHUB_DASHBOARD_PASSWORD).")
+    if not auth.basic_ok(req.headers.get("authorization", "")): raise HTTPException(401, "login required", headers={"WWW-Authenticate": 'Basic realm="SaveHub"'})
+    if "application/json" not in req.headers.get("content-type", ""): raise HTTPException(415, "application/json required")
+    origin = req.headers.get("origin")
+    if origin and origin.split("://", 1)[-1].rstrip("/") != req.headers.get("host", ""): raise HTTPException(403, "cross-origin request refused")
+
+def _vault_call(fn, *a):
+    try: return JSONResponse(fn(*a), headers=NO_STORE)
+    except vault.VaultError as e: raise HTTPException(e.status, str(e))
+
+@app.get("/api/vault/status")
+def vault_status(): return vault.status()
+
+@app.put("/api/accounts/{aid}/secret")
+async def put_secret(aid: int, req: Request):
+    _vault_guard(req); d = await req.json()
+    return _vault_call(vault.set_secret, aid, d.get("password"))
+
+@app.post("/api/accounts/{aid}/secret/reveal")
+async def reveal_secret(aid: int, req: Request):
+    _vault_guard(req); return _vault_call(vault.reveal, aid)
+
+@app.delete("/api/accounts/{aid}/secret")
+async def delete_secret(aid: int, req: Request):
+    _vault_guard(req); return _vault_call(vault.delete_secret, aid)
 
 @app.delete("/api/accounts/{aid}")
 def del_account(aid: int): db.delete_account(aid); return {"ok": True}

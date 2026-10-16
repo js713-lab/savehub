@@ -137,3 +137,19 @@ code{font:12px ui-monospace,monospace;background:var(--panel2);padding:0 4px;bor
 }
 .statusset .seg>label{flex-direction:row;gap:6px;position:relative}
 .qedit .two>label{min-width:0}.qedit input,.qedit select{width:100%;min-width:0}
+/* password vault */
+.btn.xs{padding:3px 8px;font-size:11.5px;border-radius:7px;gap:4px}
+.vstrip{display:flex;gap:9px;align-items:center;padding:8px 12px;border-radius:10px;border:1px solid var(--border);background:var(--panel);font-size:12.5px;margin-bottom:8px}
+.vstrip.on svg{color:var(--ok)}.vstrip.off{color:var(--muted)}.vstrip.off svg{color:var(--muted)}
+.vwarn{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:10px;font-size:12.5px;line-height:1.45;margin-bottom:10px;border:1px solid color-mix(in srgb,var(--warn) 45%,var(--border));background:color-mix(in srgb,var(--warn) 9%,var(--panel))}
+.vwarn svg{flex:none;color:var(--warn);margin-top:1px}.vwarn.strong{border-color:var(--warn);background:color-mix(in srgb,var(--warn) 16%,var(--panel))}
+.vfield{display:flex;flex-direction:column;gap:5px}.vfield .vwarn{margin:4px 0 0}.vfield .hint{display:flex;gap:6px;align-items:center}.vfield .hint svg{flex:none;color:var(--ok)}
+.vfield.off .hint svg{color:var(--muted)}.vfield.off input{cursor:not-allowed}
+.adorn.pw .eye{background:none;border:0;border-left:1px solid var(--border);color:var(--muted);padding:0 12px;cursor:pointer;display:grid;place-items:center}.adorn.pw .eye:hover{color:var(--text);background:var(--panel2)}
+.adorn.pw input{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.02em}
+.chk{display:flex!important;flex-direction:row!important;gap:7px;align-items:center;font-size:12.5px;color:var(--muted)}.chk input{width:auto}
+.pwrow{display:flex;gap:7px;align-items:center;font-size:12.5px;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:4px 5px 4px 9px}
+.pwrow .pwval{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);letter-spacing:.08em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.pwrow .pwval.shown{letter-spacing:0;user-select:all}.tacct .pwrow{margin-top:4px;max-width:260px}
+.vfield label.lbl{display:block}.pwrow .pwval.shown{white-space:normal;word-break:break-all}
+.pwrow .pwval.shown{flex:1}.pwrow .pwval.shown+.grow{display:none}

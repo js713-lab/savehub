@@ -60,7 +60,11 @@ try:
     n, total = asyncio.run(sdk()); check("MCP SDK client: initialize+list_tools+search_items", n == 13 and total == 1, f"{n} tools, search total={total}")
     r = httpx.get(BASE + "/healthz"); check("dashboard still healthy after MCP traffic", r.status_code == 200)
     # dashboard basic auth (second server instance with SAVEHUB_DASHBOARD_PASSWORD)
-    p2 = subprocess.Popen([sys.executable, "-m", "savehub.server"], cwd=ROOT, env={**env, "PORT": "8901", "SAVEHUB_DASHBOARD_PASSWORD": "pw123"}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    st = httpx.get(BASE + "/api/vault/status").json()
+    check("vault disabled when no dashboard login (server 1)", not st["enabled"], st["reason"][:70])
+    from cryptography.fernet import Fernet
+    VKEY = Fernet.generate_key().decode(); SECRET = "Combined-Test-Secret-密码-9!"
+    p2 = subprocess.Popen([sys.executable, "-m", "savehub.server"], cwd=ROOT, env={**env, "PORT": "8901", "SAVEHUB_DASHBOARD_PASSWORD": "pw123", "SAVEHUB_VAULT_KEY": VKEY, "SAVEHUB_DB": os.path.join(tempfile.mkdtemp(), "vault.db")}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         B2 = "http://127.0.0.1:8901"
         for _ in range(60):
@@ -71,6 +75,22 @@ try:
         check("auth mode: dashboard without login -> 401", httpx.get(B2 + "/").status_code == 401)
         check("auth mode: dashboard with login -> 200", httpx.get(B2 + "/", auth=("savehub", "pw123")).status_code == 200)
         r = httpx.post(B2 + "/mcp", json=INIT, headers={**HDR, "Authorization": f"Bearer {TOKEN}"}); check("auth mode: /mcp still uses bearer token", r.status_code == 200, str(r.status_code))
+        A2 = ("savehub", "pw123")
+        st = httpx.get(B2 + "/api/vault/status", auth=A2).json(); check("vault enabled with key + login", st["enabled"] and VKEY not in json.dumps(st), st.get("reason", ""))
+        aid = httpx.post(B2 + "/api/accounts", json={"platform": "x", "handle": "vault_combined"}, auth=A2).json()["id"]
+        r = httpx.put(f"{B2}/api/accounts/{aid}/secret", json={"password": SECRET}, auth=A2); check("vault set password", r.status_code == 200, str(r.status_code))
+        check("vault reveal without login -> 401", httpx.post(f"{B2}/api/accounts/{aid}/secret/reveal", json={}).status_code == 401)
+        r = httpx.post(f"{B2}/api/accounts/{aid}/secret/reveal", json={}, auth=A2); check("vault reveal with login -> plaintext", r.status_code == 200 and r.json()["password"] == SECRET)
+        async def mcp_leak():
+            async with streamablehttp_client(B2 + "/mcp", headers={"Authorization": f"Bearer {TOKEN}"}) as (rd, wr, _):
+                async with ClientSession(rd, wr) as s:
+                    await s.initialize()
+                    outs = [ (await s.call_tool(n, a)).content[0].text for n, a in (("list_accounts", {}), ("search_accounts", {"query": "vault_combined"}), ("list_accounts", {"platform": "x"})) ]
+                    schemas = json.dumps([t.inputSchema for t in (await s.list_tools()).tools])
+                    return outs, schemas
+        outs, schemas = asyncio.run(mcp_leak())
+        check("MCP over HTTP never returns the secret/ciphertext", all(SECRET not in o and "v1:" not in o and "has_password" not in o for o in outs) and "vault_combined" in outs[1])
+        check("MCP tool schemas accept no password", "password" not in schemas.lower())
     finally:
         p2.terminate()
 finally:

@@ -10,7 +10,7 @@ const toast = (m, o = {}) => {
   t._h = setTimeout(() => t.classList.remove('show'), o.action ? 6000 : 3500);
 };
 const COLORS = {x:'#111',threads:'#333',instagram:'#d62976',facebook:'#1877f2',messenger:'#0084ff',whatsapp:'#25d366',wechat:'#07c160',tiktok:'#ff0050',douyin:'#161823',xiaohongshu:'#ff2442',web:'#6b7280'};
-let PLATFORMS = [], ACCOUNTS = [];
+let PLATFORMS = [], ACCOUNTS = [], VAULT = {enabled: false};
 const pname = id => (PLATFORMS.find(p => p.id === id) || {}).name || id;
 const pbadge = id => `<span class="pbadge" style="background:${COLORS[id] || '#555'}">${esc(pname(id))}</span>`;
 const fdate = s => s ? new Date(s).toLocaleDateString(undefined, {year:'numeric', month:'short', day:'numeric'}) : '';
@@ -46,8 +46,8 @@ setTheme(localStorage.theme || (matchMedia('(prefers-color-scheme: light)').matc
 $('#theme').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 
 async function refreshMeta() {
-  const [h, p, a] = await Promise.all([api('/api/health'), api('/api/platforms'), api('/api/accounts?limit=5000')]);
-  PLATFORMS = p; ACCOUNTS = a.accounts;
+  const [h, p, a, v] = await Promise.all([api('/api/health'), api('/api/platforms'), api('/api/accounts?limit=5000'), api('/api/vault/status').catch(() => ({enabled: false, reason: 'Vault status unavailable'}))]);
+  PLATFORMS = p; ACCOUNTS = a.accounts; VAULT = v;
   $('#statline').textContent = `${h.stats.items} items · ${h.stats.contacts} contacts · ${h.stats.accounts} accounts · tagger: ${h.ai.active}`;
   $('#samplebar').classList.toggle('hidden', !h.stats.samples); $('#samplecount').textContent = h.stats.samples;
 }
@@ -189,12 +189,55 @@ const IC = {
   grid: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
   list: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>',
   plus: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  eyeoff: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.2M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7a9.6 9.6 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
+  key: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M16 7l3 3M18 5l2 2"/></svg>',
+  shield: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6Z"/><path d="m9 12 2 2 4-4"/></svg>',
+  warn: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3 2 21h20Z"/><path d="M12 10v5M12 18h.01"/></svg>',
   search: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
 };
 const statusPill = s => `<span class="spill s-${esc(s || 'active')}">${esc((STATUSES.find(x => x[0] === s) || [0, s || 'active'])[1])}</span>`;
 const acctLabel = a => a.display_name || showHandle(a.platform, a.handle) || 'Untitled';
 const findAcct = id => (A.all || []).find(a => a.id === id) || ACCOUNTS.find(a => a.id === id);
 const isDup = (p, h, exceptId) => { h = cleanHandle(h).toLowerCase(); return h && ACCOUNTS.find(a => a.platform === p && (a.handle || '').toLowerCase() === h && a.id !== exceptId); };
+
+// ---- password vault UI ----
+const vaultWarn = (compact) => VAULT.storage === 'persistent' ? '' : `<div class="vwarn ${VAULT.storage === 'ephemeral' ? 'strong' : ''}" role="note">${IC.warn}<div><b>${VAULT.storage === 'ephemeral' ? 'Saved passwords will NOT persist on this server yet.' : 'Heads-up for the hosted version.'}</b>
+  ${compact ? 'Render’s free tier has no persistent disk — the database (incl. passwords) is wiped on every restart, redeploy or idle spin-down until a paid persistent disk is attached. Keep a copy in a password manager.'
+  : 'Render’s free tier has no persistent disk, so the SQLite database — including every saved password — is wiped on each restart, redeploy or idle spin-down. Passwords only persist once a persistent disk (paid plan) is attached. Keep a copy in your password manager.'}</div></div>`;
+const vaultStrip = () => VAULT.enabled
+  ? `<div class="vstrip on">${IC.shield}<span><b>Password vault on</b> · ${esc(VAULT.algorithm)} encryption at rest · ${VAULT.count} saved</span></div>${vaultWarn()}`
+  : `<div class="vstrip off">${IC.key}<span><b>Password vault off.</b> ${esc(VAULT.reason || '')}</span></div>`;
+const pwRow = a => !a.has_password ? '' : `<div class="pwrow" data-pw="${a.id}">${IC.key}<span class="pwval" aria-live="polite">••••••••</span><span class="grow"></span>
+  ${VAULT.enabled ? `<button type="button" class="btn ghost xs" data-act="reveal" data-id="${a.id}" aria-pressed="false" aria-label="Reveal password for ${esc(acctLabel(a))}">${IC.eye}<span>Reveal</span></button><button type="button" class="btn ghost xs" data-act="copypw" data-id="${a.id}" aria-label="Copy password for ${esc(acctLabel(a))}">Copy</button>`
+    : `<span class="muted small" title="${esc(VAULT.reason || '')}">locked</span>`}</div>`;
+const revealSecret = id => jpost(`/api/accounts/${id}/secret/reveal`, {});
+async function revealPw(btn, id) {
+  const row = btn.closest('.pwrow'), val = row.querySelector('.pwval');
+  if (btn.getAttribute('aria-pressed') === 'true') { maskPw(row); return; }
+  try { const r = await revealSecret(id); val.textContent = r.password; val.classList.add('shown'); btn.setAttribute('aria-pressed', 'true'); btn.innerHTML = `${IC.eyeoff}<span>Hide</span>`;
+    clearTimeout(row._t); row._t = setTimeout(() => maskPw(row), 30000); } catch (e) { toast(e.message, {kind: 'err'}); }
+}
+function maskPw(row) { const val = row.querySelector('.pwval'), btn = row.querySelector('[data-act=reveal]'); clearTimeout(row._t); val.textContent = '••••••••'; val.classList.remove('shown'); if (btn) { btn.setAttribute('aria-pressed', 'false'); btn.innerHTML = `${IC.eye}<span>Reveal</span>`; } }
+async function copyPw(id) {
+  try { const {password} = await revealSecret(id);
+    try { await navigator.clipboard.writeText(password); } catch { const t = document.createElement('textarea'); t.value = password; t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); }
+    toast('Password copied to clipboard', {kind: 'ok'}); } catch (e) { toast(e.message, {kind: 'err'}); }
+}
+const vaultField = e => {
+  if (!VAULT.enabled) return `<div class="full vfield off"><span class="lbl">Password <span class="opt">optional</span></span><div class="adorn"><input type="password" disabled placeholder="Vault off — passwords can’t be saved" aria-label="Password (disabled)"></div><span class="hint">${IC.key} ${esc(VAULT.reason || 'Password vault is not enabled.')}</span></div>`;
+  return `<div class="full vfield"><label for="f_password" class="lbl">Password <span class="opt">optional · encrypted</span></label>
+    <div class="adorn pw"><input id="f_password" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="off" placeholder="${e.has_password ? '•••••••• saved — type to replace' : 'Login password for this account'}" aria-describedby="h_password"><button type="button" class="eye" id="pwEye" aria-label="Show password" aria-pressed="false" title="Show / hide">${IC.eye}</button></div>
+    <span class="hint" id="h_password">${IC.shield} Encrypted at rest (${esc(VAULT.algorithm)}) with a key that only lives in the server environment; shown only to you after login.</span>
+    ${e.has_password ? `<label class="chk"><input type="checkbox" id="f_pw_remove"> Remove the saved password</label>` : ''}
+    ${vaultWarn(true)}</div>`;
+};
+async function saveSecretFor(id) {
+  const pw = $('#f_password') ? $('#f_password').value : '', rm = $('#f_pw_remove') && $('#f_pw_remove').checked;
+  if (pw) await jpost(`/api/accounts/${id}/secret`, {password: pw}, 'PUT');
+  else if (rm) await api(`/api/accounts/${id}/secret`, {method: 'DELETE', headers: {'Content-Type': 'application/json'}});
+  return pw ? 'saved' : rm ? 'removed' : '';
+}
 
 const A = {q: '', platform: '', status: '', sort: 'platform', order: 'asc', view: localStorage.acctView || 'grid', all: [], editing: null};
 async function viewAccounts() {
@@ -208,6 +251,7 @@ async function viewAccounts() {
       <a class="btn ghost" href="/api/accounts/export.csv" title="Download all accounts as CSV">Export CSV</a>
     </div>
   </section>
+  <div id="vaultbar">${vaultStrip()}</div>
   <div class="segbar" id="psegs" role="toolbar" aria-label="Filter by platform"></div>
   <div class="toolbar acct-tools">
     <div class="searchwrap">${IC.search}<input class="search" id="aq" type="search" aria-label="Search accounts" placeholder="Search name, handle, email, phone, notes, tags…" value="${esc(A.q)}"><kbd>/</kbd></div>
@@ -217,7 +261,7 @@ async function viewAccounts() {
     <div class="seg" role="group" aria-label="Layout"><button class="${A.view === 'grid' ? 'on' : ''}" data-v="grid" aria-pressed="${A.view === 'grid'}" title="Cards grouped by platform">${IC.grid}<span>Cards</span></button><button class="${A.view === 'list' ? 'on' : ''}" data-v="list" aria-pressed="${A.view === 'list'}" title="Compact table">${IC.list}<span>Table</span></button></div>
   </div>
   <div id="alist" aria-live="polite"></div>
-  <p class="muted small lock">🔒 SaveHub intentionally <b>never stores passwords</b> — keep those in a password manager. Items and contacts can be linked to any account.</p>`;
+  <p class="muted small lock">🔒 Passwords are optional and are only ever stored <b>encrypted</b> (never in plaintext, never in CSV exports, never via MCP). Items and contacts can be linked to any account.</p>`;
   let t; $('#aq').oninput = e => { clearTimeout(t); t = setTimeout(() => { A.q = e.target.value.trim(); loadAccounts(); }, 180); };
   $('#asort').onchange = e => { A.sort = e.target.value; A.order = e.target.value === 'created_at' ? 'desc' : 'asc'; $('#aorder').textContent = A.order === 'desc' ? '↓' : '↑'; loadAccounts(); };
   $('#aorder').onclick = e => { A.order = A.order === 'desc' ? 'asc' : 'desc'; e.currentTarget.textContent = A.order === 'desc' ? '↓' : '↑'; loadAccounts(); };
@@ -231,7 +275,7 @@ async function viewAccounts() {
 }
 async function loadAccounts() {
   const r = await api('/api/accounts?' + new URLSearchParams({q: A.q, sort: A.sort, order: A.order, limit: 5000}));
-  A.all = r.accounts; renderAccounts();
+  A.all = r.accounts; if ($('#vaultbar')) $('#vaultbar').innerHTML = vaultStrip(); renderAccounts();
 }
 function renderAccounts() {
   if (!$('#alist')) return;
@@ -274,6 +318,7 @@ function acctCard(a) {
       <div class="hd">${h ? (a.profile_url ? `<a href="${esc(a.profile_url)}" target="_blank" rel="noopener">${esc(h)} ${IC.link}</a>` : esc(h)) : '<span class="muted">no handle</span>'}</div></div>${statusPill(a.status)}</div>
     ${a.linked_email || a.linked_phone ? `<div class="acard-meta">${a.linked_email ? `<span>${IC.mail}${esc(a.linked_email)}</span>` : ''}${a.linked_phone ? `<span>${IC.phone}${esc(a.linked_phone)}</span>` : ''}</div>` : ''}
     ${(a.tags || []).length ? `<div class="tags">${a.tags.map(t => `<span class="tag" data-act="tag" data-t="${esc(t)}">#${esc(t)}</span>`).join('')}</div>` : ''}
+    ${pwRow(a)}
     ${a.notes ? `<div class="notes">${esc(a.notes)}</div>` : ''}
     <div class="acard-foot"><a href="#" class="muted small" data-act="items" data-id="${a.id}">${a.item_count} item${a.item_count === 1 ? '' : 's'} · ${a.contact_count} contact${a.contact_count === 1 ? '' : 's'}</a>
       <span class="acts"><button class="icon" data-act="qedit" data-id="${a.id}" aria-label="Quick edit ${esc(acctLabel(a))}" title="Quick edit">${IC.edit}</button><button class="icon danger" data-act="del" data-id="${a.id}" aria-label="Delete ${esc(acctLabel(a))}" title="Delete">${IC.trash}</button></span></div>
@@ -294,7 +339,7 @@ function acctTable(list) {
   const cols = [['platform', 'App'], ['display_name', 'Account'], ['', 'Linked email / phone'], ['', 'Tags'], ['status', 'Status'], ['', 'Linked'], ['created_at', 'Added'], ['', '']];
   return `<div class="tablewrap"><table class="atable"><thead><tr>${cols.map(([k, l]) => `<th ${k ? `tabindex="0" data-sort="${k}" aria-sort="${A.sort === k ? (A.order === 'desc' ? 'descending' : 'ascending') : 'none'}"` : ''}>${l}${A.sort === k ? (A.order === 'desc' ? ' ↓' : ' ↑') : ''}</th>`).join('')}</tr></thead><tbody>
   ${list.map(a => A.editing === a.id ? `<tr class="editing"><td colspan="8">${acctQuickEdit(a)}</td></tr>` : `<tr data-id="${a.id}"><td><span class="tplat">${pmark(a.platform, 'xs')}${esc(pname(a.platform))}</span></td>
-    <td><div class="tacct">${avatar(a)}<div><b>${esc(a.display_name || showHandle(a.platform, a.handle) || 'Untitled')}</b>${a.is_sample ? ' <span class="sample">SAMPLE</span>' : ''}<div class="muted small">${a.profile_url ? `<a href="${esc(a.profile_url)}" target="_blank" rel="noopener">${esc(showHandle(a.platform, a.handle) || a.profile_url)}</a>` : esc(showHandle(a.platform, a.handle))}</div></div></div></td>
+    <td><div class="tacct">${avatar(a)}<div><b>${esc(a.display_name || showHandle(a.platform, a.handle) || 'Untitled')}</b>${a.is_sample ? ' <span class="sample">SAMPLE</span>' : ''}<div class="muted small">${a.profile_url ? `<a href="${esc(a.profile_url)}" target="_blank" rel="noopener">${esc(showHandle(a.platform, a.handle) || a.profile_url)}</a>` : esc(showHandle(a.platform, a.handle))}</div>${pwRow(a)}</div></div></td>
     <td class="small">${esc(a.linked_email || '')}${a.linked_email && a.linked_phone ? '<br>' : ''}${esc(a.linked_phone || '')}</td>
     <td>${(a.tags || []).map(t => `<span class="tag" data-act="tag" data-t="${esc(t)}">#${esc(t)}</span>`).join(' ')}</td><td>${statusPill(a.status)}</td>
     <td class="small"><a href="#" data-act="items" data-id="${a.id}">${a.item_count} items</a> · ${a.contact_count} contacts</td><td class="small muted">${fdate(a.created_at)}</td>
@@ -313,6 +358,8 @@ function onAcctListClick(e) {
   else if (act === 'qcancel') { const fid = A.editing; A.editing = null; renderAccounts(); focusCard(fid); }
   else if (act === 'fulledit') { A.editing = null; renderAccounts(); openAddAccount(findAcct(id).platform, 'single', findAcct(id)); }
   else if (act === 'del') deleteAccountFlow(id);
+  else if (act === 'reveal') revealPw(b, id);
+  else if (act === 'copypw') copyPw(id);
 }
 const focusCard = id => { const el = document.querySelector(`[data-id="${id}"] [data-act="qedit"]`); if (el) el.focus(); };
 document.addEventListener('keydown', e => {
@@ -339,8 +386,12 @@ function confirmDialog({title, body, ok = 'Delete', danger = true}) {
 }
 async function deleteAccountFlow(id, fromModal) {
   const a = findAcct(id); if (!a) return;
-  const linked = a.item_count + a.contact_count;
-  const ok = await confirmDialog({title: `Delete ${esc(acctLabel(a))}?`, body: `This removes the ${esc(pname(a.platform))} account record${linked ? `. Its ${a.item_count} item(s) and ${a.contact_count} contact(s) are kept but will be unlinked` : ''}. Nothing on ${esc(pname(a.platform))} itself is changed.`});
+  const linked = a.item_count + a.contact_count + (a.has_password ? 1 : 0);
+  const parts = [`This removes the ${esc(pname(a.platform))} account record.`];
+  if (a.item_count + a.contact_count) parts.push(`Its ${a.item_count} item(s) and ${a.contact_count} contact(s) are kept but will be unlinked.`);
+  if (a.has_password) parts.push('<b>Its saved password is permanently deleted.</b>');
+  parts.push(`Nothing on ${esc(pname(a.platform))} itself is changed.`);
+  const ok = await confirmDialog({title: `Delete ${esc(acctLabel(a))}?`, body: parts.join(' ')});
   if (!ok) { if (fromModal) openAddAccount(a.platform, 'single', a); return; }
   await api('/api/accounts/' + id, {method: 'DELETE'});
   const restore = {}; ['platform', 'display_name', 'handle', 'profile_url', 'linked_email', 'linked_phone', 'notes', 'tags', 'status', 'connected_via', 'created_at'].forEach(k => restore[k] = a[k]);
@@ -398,6 +449,7 @@ function renderAM() {
       ${fld('profile_url', 'Profile URL', {type: 'url', ph: PURL[p] ? 'Auto-filled from handle' : 'https://…', opt: true})}
       ${fld('linked_email', 'Linked email', {type: 'email', ph: 'you@example.com', opt: true})}
       ${fld('linked_phone', 'Linked phone', {type: 'tel', ph: '+60 12-345 6789', opt: true})}
+      ${vaultField(e)}
       <fieldset class="full statusset"><legend class="lbl">Status</legend><div class="seg" role="radiogroup">${STATUSES.map(([v, l]) => `<label class="${status === v ? 'on' : ''}"><input type="radio" name="status" value="${v}" ${status === v ? 'checked' : ''}><i class="sdot s-${v}"></i>${l}</label>`).join('')}</div></fieldset>
       ${fld('tags', 'Tags', {ph: 'personal, work, food', opt: true})}
       ${fld('connected_via', 'Connected via', {ph: 'e.g. Google login, phone', opt: true})}
@@ -420,6 +472,7 @@ function renderAM() {
   $('#amSave').onclick = () => saveAM(!AM.edit);
   if ($('#amSaveClose')) $('#amSaveClose').onclick = () => saveAM(false);
   if ($('#amDone')) $('#amDone').onclick = closeModal;
+  if ($('#pwEye')) $('#pwEye').onclick = () => { const i = $('#f_password'), show = i.type === 'password'; i.type = show ? 'text' : 'password'; const b = $('#pwEye'); b.setAttribute('aria-pressed', show); b.setAttribute('aria-label', show ? 'Hide password' : 'Show password'); b.innerHTML = show ? IC.eyeoff : IC.eye; i.focus(); };
   renderAdded(); updateUrlPreview();
   const hf = $('#f_handle'); if (hf) { hf.focus(); hf.select(); }
 }
@@ -473,13 +526,17 @@ async function saveAM(another) {
   try {
     if (AM.edit) {
       await jpost('/api/accounts/' + AM.edit.id, b, 'PUT');
-      closeModal(); toast(`Saved ${b.display_name || showHandle(b.platform, b.handle)}`, {kind: 'ok'});
+      let pwMsg = '';
+      try { const s = await saveSecretFor(AM.edit.id); pwMsg = s ? ` · password ${s}` : ''; } catch (err) { toast('Account saved, but the password was NOT stored: ' + err.message, {kind: 'err'}); closeModal(); await refreshMeta(); if ($('#alist')) loadAccounts(); return; }
+      closeModal(); toast(`Saved ${b.display_name || showHandle(b.platform, b.handle)}${pwMsg}`, {kind: 'ok'});
     } else {
       const r = await jpost('/api/accounts', b);
       if (!r.created) { $('#e_handle').textContent = 'This account already exists'; btn.disabled = false; return; }
+      let pwMsg = '', pwFailed = false;
+      try { const s = await saveSecretFor(r.id); pwMsg = s ? ' · password encrypted' : ''; } catch (err) { pwFailed = true; toast('Account added, but the password was NOT stored: ' + err.message, {kind: 'err'}); }
       AM.added.push({id: r.id, platform: b.platform, label: b.display_name || showHandle(b.platform, b.handle)});
       AM.lastStatus = b.status; AM.lastTags = b.tags; AM.lastVia = b.connected_via === 'manual' ? '' : b.connected_via;
-      toast(`Added ${showHandle(b.platform, b.handle) || b.display_name} to ${pname(b.platform)}`, {kind: 'ok'});
+      if (!pwFailed) toast(`Added ${showHandle(b.platform, b.handle) || b.display_name} to ${pname(b.platform)}${pwMsg}`, {kind: 'ok'});
       await refreshMeta();
       if (another) { AM.tried = false; renderAM(); } else closeModal();
     }

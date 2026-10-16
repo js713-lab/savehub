@@ -113,6 +113,126 @@ def test_accounts_bulk_paste_preview_stats():
     for a in c.get("/api/accounts", params={"q": "bulk"}).json()["accounts"]: c.delete(f"/api/accounts/{a['id']}")
     for a in c.get("/api/accounts", params={"q": "小红书号123"}).json()["accounts"] + c.get("/api/accounts", params={"platform": "whatsapp", "q": "345"}).json()["accounts"]: c.delete(f"/api/accounts/{a['id']}")
 
+# ---------------- encrypted password vault ----------------
+import asyncio, base64, sqlite3
+from cryptography.fernet import Fernet
+TEST_KEY = Fernet.generate_key().decode()   # throwaway, generated per run
+DASH = ("savehub", "dash-test-pw")
+PLAIN = "S3cr3t-Pässwörd-测试-!@#"
+J = {"Content-Type": "application/json"}
+
+def _vault_env(mp, key=TEST_KEY, login=True):
+    mp.setenv("SAVEHUB_VAULT_KEY", key) if key else mp.delenv("SAVEHUB_VAULT_KEY", raising=False)
+    mp.setenv("SAVEHUB_DASHBOARD_PASSWORD", DASH[1]) if login else mp.delenv("SAVEHUB_DASHBOARD_PASSWORD", raising=False)
+
+def _new_acct(handle):
+    return c.post("/api/accounts", json={"platform": "instagram", "handle": handle, "display_name": "Vault " + handle}).json()["id"]
+
+def _db_bytes():
+    from savehub import db
+    db.conn().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    p = os.environ["SAVEHUB_DB"]
+    return b"".join(open(f, "rb").read() for f in (p, p + "-wal") if os.path.exists(f))
+
+def test_vault_disabled_without_key(monkeypatch):
+    _vault_env(monkeypatch, key=None)
+    st = c.get("/api/vault/status").json(); assert not st["enabled"] and "SAVEHUB_VAULT_KEY" in st["reason"]
+    aid = _new_acct("vault.nokey")
+    r = c.put(f"/api/accounts/{aid}/secret", json={"password": PLAIN}, headers=J, auth=DASH)
+    assert r.status_code == 503 and "SAVEHUB_VAULT_KEY" in r.json()["detail"]
+    assert c.post(f"/api/accounts/{aid}/secret/reveal", json={}, auth=DASH).status_code == 503
+    from savehub import db
+    assert db.conn().execute("SELECT count(*) FROM account_secrets WHERE account_id=?", (aid,)).fetchone()[0] == 0
+    assert PLAIN.encode() not in _db_bytes()                       # nothing stored, plaintext nowhere
+    _vault_env(monkeypatch, key="short")                            # too-short passphrase is refused too
+    assert not c.get("/api/vault/status").json()["enabled"]
+
+def test_vault_disabled_without_login(monkeypatch):
+    _vault_env(monkeypatch, login=False)
+    st = c.get("/api/vault/status").json(); assert not st["enabled"] and "SAVEHUB_DASHBOARD_PASSWORD" in st["reason"]
+    aid = _new_acct("vault.nologin")
+    assert c.put(f"/api/accounts/{aid}/secret", json={"password": PLAIN}, headers=J).status_code == 503
+
+def test_vault_roundtrip_ciphertext_only_and_auth(monkeypatch):
+    _vault_env(monkeypatch)
+    st = c.get("/api/vault/status").json(); assert st["enabled"] and st["algorithm"] == "AES-256-GCM", st
+    assert TEST_KEY not in json.dumps(st)
+    aid, other = _new_acct("vault.one"), _new_acct("vault.two")
+    url = f"/api/accounts/{aid}/secret"
+    # auth required (no creds / wrong creds), JSON-only, same-origin only
+    assert c.put(url, json={"password": PLAIN}).status_code == 401
+    assert c.put(url, json={"password": PLAIN}, auth=("savehub", "wrong")).status_code == 401
+    assert c.put(url, content=json.dumps({"password": PLAIN}), headers={"Content-Type": "text/plain"}, auth=DASH).status_code == 415
+    assert c.put(url, json={"password": PLAIN}, headers={**J, "Origin": "https://evil.example.com"}, auth=DASH).status_code == 403
+    assert c.put(url, json={"password": ""}, auth=DASH).status_code == 400
+    r = c.put(url, json={"password": PLAIN}, auth=DASH); assert r.status_code == 200 and r.json()["has_password"]
+    # reveal: auth required, returns plaintext with no-store
+    assert c.post(url + "/reveal", json={}).status_code == 401
+    assert c.post(url + "/reveal", json={}, auth=("savehub", "nope")).status_code == 401
+    r = c.post(url + "/reveal", json={}, auth=DASH)
+    assert r.status_code == 200 and r.json()["password"] == PLAIN and "no-store" in r.headers["cache-control"]
+    # DB holds only ciphertext
+    from savehub import db
+    cipher = db.conn().execute("SELECT cipher FROM account_secrets WHERE account_id=?", (aid,)).fetchone()[0]
+    assert cipher.startswith("v1:") and PLAIN not in cipher and PLAIN.encode() not in base64.b64decode(cipher[3:])
+    raw = _db_bytes()
+    assert PLAIN.encode() not in raw and PLAIN.encode("utf-16-le") not in raw and TEST_KEY.encode() not in raw
+    cols = [r[1] for r in db.conn().execute("PRAGMA table_info(accounts)")]; assert not any("pass" in x or "secret" in x for x in cols)
+    # list/export never contain secrets
+    lst = c.get("/api/accounts", params={"q": "vault.one"}).json()
+    assert lst["accounts"][0]["has_password"] is True and PLAIN not in json.dumps(lst) and cipher not in json.dumps(lst)
+    exp = c.get("/api/accounts/export.csv").text; assert PLAIN not in exp and cipher not in exp
+    # plaintext password via generic endpoints still rejected
+    assert c.post("/api/accounts", json={"platform": "x", "handle": "pw", "password": PLAIN}).status_code == 400
+    assert c.put(f"/api/accounts/{aid}", json={"password": PLAIN}).status_code == 400
+    # two encryptions of the same value differ (random nonce); ciphertext bound to its account (AAD)
+    c.put(f"/api/accounts/{other}/secret", json={"password": PLAIN}, auth=DASH)
+    c2 = db.conn().execute("SELECT cipher FROM account_secrets WHERE account_id=?", (other,)).fetchone()[0]; assert c2 != cipher
+    db.conn().execute("UPDATE account_secrets SET cipher=? WHERE account_id=?", (cipher, other)); db.conn().commit()
+    assert c.post(f"/api/accounts/{other}/secret/reveal", json={}, auth=DASH).status_code == 409
+    # wrong master key -> refused, not garbage
+    _vault_env(monkeypatch, key=Fernet.generate_key().decode())
+    st = c.get("/api/vault/status").json(); assert not st["enabled"] and st["key_mismatch"]
+    assert c.post(url + "/reveal", json={}, auth=DASH).status_code == 409
+    _vault_env(monkeypatch)
+    # replace + remove + cascade on account delete
+    c.put(url, json={"password": "second-value"}, auth=DASH)
+    assert c.post(url + "/reveal", json={}, auth=DASH).json()["password"] == "second-value"
+    assert c.request("DELETE", url, json={}, auth=DASH).json()["deleted"] == 1
+    assert c.post(url + "/reveal", json={}, auth=DASH).status_code == 400
+    assert c.delete(f"/api/accounts/{other}").json()["ok"]
+    assert db.conn().execute("SELECT count(*) FROM account_secrets WHERE account_id=?", (other,)).fetchone()[0] == 0
+    c.delete(f"/api/accounts/{aid}")
+
+def test_vault_passphrase_key(monkeypatch):
+    _vault_env(monkeypatch)            # same DB keeps one key-check; a different key must be refused
+    _vault_env(monkeypatch, key="a long passphrase that is not a fernet key")
+    assert c.get("/api/vault/status").json()["key_mismatch"]
+    from savehub import db
+    db.conn().execute("DELETE FROM account_secrets"); db.conn().execute("DELETE FROM vault_meta"); db.conn().commit()   # fresh vault
+    assert c.get("/api/vault/status").json()["enabled"]          # PBKDF2-HMAC-SHA256 (600k) path
+    aid = _new_acct("vault.pp")
+    assert c.put(f"/api/accounts/{aid}/secret", json={"password": PLAIN}, auth=DASH).status_code == 200
+    assert c.post(f"/api/accounts/{aid}/secret/reveal", json={}, auth=DASH).json()["password"] == PLAIN
+    assert PLAIN.encode() not in _db_bytes()
+    c.delete(f"/api/accounts/{aid}")
+    db.conn().execute("DELETE FROM vault_meta"); db.conn().commit()
+
+def test_mcp_never_exposes_secrets(monkeypatch):
+    _vault_env(monkeypatch)
+    from savehub import mcp_server
+    aid = _new_acct("vault.mcp")
+    assert c.put(f"/api/accounts/{aid}/secret", json={"password": PLAIN}, auth=DASH).status_code == 200
+    from savehub import db
+    cipher = db.conn().execute("SELECT cipher FROM account_secrets WHERE account_id=?", (aid,)).fetchone()[0]
+    out = json.dumps([mcp_server.list_accounts(), mcp_server.search_accounts("vault.mcp"), mcp_server.add_account("x", handle="vault.mcp2")], ensure_ascii=False)
+    assert PLAIN not in out and cipher not in out and "has_password" not in out
+    tools = asyncio.run(mcp_server.mcp.list_tools())
+    assert len(tools) == 13
+    for t in tools:
+        assert "password" not in json.dumps(t.inputSchema).lower() and "secret" not in t.name.lower() and "vault" not in t.name.lower(), t.name
+    c.delete(f"/api/accounts/{aid}")
+
 def test_settings_sync_drive_folder(tmp_path):
     c.put("/api/settings", json={"drive": {"enabled": True, "mode": "folder", "folder_path": str(tmp_path)}})
     r = c.post("/api/sync").json()

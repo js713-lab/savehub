@@ -2,7 +2,7 @@
 Deployment (Render etc.): binds 0.0.0.0:$PORT. Local: SAVEHUB_HOST/SAVEHUB_PORT (default 127.0.0.1:8765).
 """
 import contextlib, os
-from . import app as webapp, db, seed
+from . import app as webapp, auth, db, seed
 from .mcp_server import BearerAuth, mcp, mcp_token
 
 TOKEN = mcp_token()
@@ -24,23 +24,15 @@ def healthz():
     db.conn().execute("SELECT 1")
     return {"ok": True}
 
-DASH_USER = os.environ.get("SAVEHUB_DASHBOARD_USER", "savehub")
-DASH_PASS = os.environ.get("SAVEHUB_DASHBOARD_PASSWORD", "")
-
 def _basic_ok(scope):
-    import base64, hmac
-    h = dict(scope.get("headers") or []).get(b"authorization", b"").decode()
-    if not h.lower().startswith("basic "): return False
-    try: u, _, pw = base64.b64decode(h[6:]).decode().partition(":")
-    except Exception: return False
-    return hmac.compare_digest(u, DASH_USER) and hmac.compare_digest(pw, DASH_PASS)
+    return auth.basic_ok(dict(scope.get("headers") or []).get(b"authorization", b""))
 
 async def app(scope, receive, send):
     """ASGI dispatcher: /mcp (and /mcp/...) -> MCP (bearer auth), everything else -> FastAPI
     (optionally behind HTTP Basic auth when SAVEHUB_DASHBOARD_PASSWORD is set; /healthz stays open)."""
     if scope["type"] in ("http", "websocket"):
         path = scope.get("path", "")
-        if DASH_PASS and path != "/healthz" and not (path == "/mcp" or path.startswith("/mcp/")) and not _basic_ok(scope):
+        if auth.login_configured() and path != "/healthz" and not (path == "/mcp" or path.startswith("/mcp/")) and not _basic_ok(scope):
             await send({"type": "http.response.start", "status": 401, "headers": [(b"www-authenticate", b'Basic realm="SaveHub"'), (b"content-type", b"text/plain")]})
             await send({"type": "http.response.body", "body": b"login required"}); return
         if path == "/mcp" or path.startswith("/mcp/"):

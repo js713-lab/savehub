@@ -17,6 +17,10 @@ services:
         generateValue: true
       - key: SAVEHUB_DASHBOARD_PASSWORD # HTTP Basic login for the dashboard (user: savehub); /healthz and /mcp excluded
         generateValue: true
+      - key: SAVEHUB_VAULT_KEY          # enables the encrypted password vault (AES-256-GCM). Paste a Fernet key; NEVER commit it.
+        sync: false                     #   generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      # - key: SAVEHUB_PERSISTENT_DISK  # set to 1 only after attaching a persistent disk (paid) -> hides the "passwords won't persist" warning
+      #   value: "1"
       - key: SAVEHUB_ENABLED_PLATFORMS
         value: x,threads,instagram,facebook,messenger,whatsapp,wechat,tiktok,douyin,xiaohongshu,web
       - key: SAVEHUB_DB

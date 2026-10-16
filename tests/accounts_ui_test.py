@@ -1,10 +1,12 @@
 """Headless UI test of the Accounts experience + screenshots. Needs a running server (default http://127.0.0.1:8900).
 Run: PORT=8900 SAVEHUB_DB=/tmp/x.db python -m savehub.server &  then  python tests/accounts_ui_test.py"""
-import os, pathlib, httpx
+import json, os, pathlib, httpx
 from playwright.sync_api import sync_playwright, expect
 BASE = os.environ.get("SAVEHUB_URL", "http://127.0.0.1:8900")
 OUT = pathlib.Path(__file__).resolve().parent.parent / "screenshots"; OUT.mkdir(exist_ok=True)
-api = lambda p, **kw: httpx.get(BASE + p, params=kw).json()
+DASH_PW = os.environ.get("SAVEHUB_DASHBOARD_PASSWORD", "")
+AUTH = ("savehub", DASH_PW) if DASH_PW else None
+api = lambda p, **kw: httpx.get(BASE + p, params=kw, auth=AUTH).json()
 results = []
 def check(name, ok, detail=""):
     results.append(ok); print(("PASS" if ok else "FAIL"), name, detail)
@@ -14,7 +16,10 @@ def shot(pg, name, full=False):
 with sync_playwright() as p:
     exe = os.environ.get("CHROME", "/usr/bin/google-chrome")
     b = p.chromium.launch(executable_path=exe if os.path.exists(exe) else None, args=["--no-sandbox"])
-    pg = b.new_page(viewport={"width": 1366, "height": 900})
+    def new_page(**kw):
+        ctx = b.new_context(http_credentials={"username": AUTH[0], "password": AUTH[1]} if AUTH else None, permissions=["clipboard-read", "clipboard-write"], **kw)
+        return ctx.new_page()
+    pg = new_page(viewport={"width": 1366, "height": 900})
     errors = []; pg.on("pageerror", lambda e: errors.append(str(e)))
     pg.add_init_script("localStorage.theme='dark'; localStorage.acctView='grid';")
     pg.goto(BASE + "/#/accounts"); pg.wait_for_selector(".agroup")
@@ -110,15 +115,60 @@ with sync_playwright() as p:
     pg.click(f'[data-act="qedit"][data-id="{aid}"]'); pg.click('[data-act="fulledit"]'); pg.wait_for_selector("#f_handle")
     pg.fill("#f_notes", "edited in full modal"); pg.click("#amSave"); pg.wait_for_timeout(600)
     check("full edit modal saves", api("/api/accounts", q="js.ui.two")["accounts"][0]["notes"] == "edited in full modal")
-    check("no password inputs anywhere", pg.locator('input[type=password], [name*=pass]').count() == 0)
+    check("no plaintext password field on the page (only the masked vault field in the form)", pg.locator('input[type=password]:visible').count() == 0 and pg.locator('[name*=pass]').count() == 0)
 
-    po = b.new_page(viewport={"width": 1366, "height": 900}); po.add_init_script("localStorage.theme='dark'; localStorage.acctView='grid';")
+    # --- encrypted password vault
+    vs = api("/api/vault/status")
+    if not vs["enabled"]:
+        check("vault enabled for UI test (set SAVEHUB_VAULT_KEY + SAVEHUB_DASHBOARD_PASSWORD)", False, vs["reason"])
+    else:
+        PW = "UI-Vault-pässwörd-42!"
+        pg.click("#addAcct"); pg.wait_for_selector(".ptile"); pg.click('.ptile[data-p="facebook"]'); pg.wait_for_selector("#f_password")
+        check("password field is masked (type=password, autocomplete=new-password)", pg.get_attribute("#f_password", "type") == "password" and pg.get_attribute("#f_password", "autocomplete") == "new-password")
+        check("encrypted-at-rest helper text", "Encrypted at rest" in pg.text_content("#h_password"))
+        check("free-tier persistence warning visible in form", pg.locator(".vfield .vwarn").count() == 1 and "persistent disk" in pg.text_content(".vfield .vwarn"))
+        pg.fill("#f_handle", "js.vault.ui"); pg.fill("#f_display_name", "Vault UI"); pg.fill("#f_password", PW)
+        pg.click("#pwEye")
+        check("eye toggle shows password", pg.get_attribute("#f_password", "type") == "text" and pg.get_attribute("#pwEye", "aria-pressed") == "true")
+        pg.click("#pwEye"); check("eye toggle hides again", pg.get_attribute("#f_password", "type") == "password")
+        pg.evaluate("document.querySelector('.modal-card').scrollTop = 200")
+        shot(pg, "19_vault_password_field")
+        reqs = []; pg.on("request", lambda r: reqs.append((r.method, r.url, r.post_data or "")))
+        pg.click("#amSaveClose"); pg.wait_for_timeout(900)
+        a = api("/api/accounts", q="js.vault.ui")["accounts"][0]
+        check("account saved with has_password", a["has_password"] is True and "password" not in json.dumps({k: v for k, v in a.items() if k not in ("has_password", "password_updated_at")}))
+        create = [r for r in reqs if r[0] == "POST" and r[1].endswith("/api/accounts")]
+        check("plaintext not sent to the generic accounts endpoint", create and PW not in create[0][2])
+        check("password sent only to the vault endpoint", any(r[0] == "PUT" and r[1].endswith(f"/api/accounts/{a['id']}/secret") for r in reqs))
+        r = httpx.post(f"{BASE}/api/accounts/{a['id']}/secret/reveal", json={}); check("reveal without login refused", r.status_code == 401, str(r.status_code))
+        pg.fill("#aq", "js.vault.ui"); pg.wait_for_timeout(600)
+        row = pg.locator(f'.pwrow[data-pw="{a["id"]}"]')
+        check("card shows masked password", row.count() == 1 and row.locator(".pwval").text_content() == "••••••••")
+        check("vault strip on accounts page", "Password vault on" in pg.text_content("#vaultbar") and "persistent disk" in pg.text_content("#vaultbar"))
+        shot(pg, "20a_vault_masked")
+        row.locator('[data-act="reveal"]').click(); pg.wait_for_timeout(500)
+        check("Reveal shows decrypted password", row.locator(".pwval").text_content() == PW)
+        shot(pg, "20_vault_reveal")
+        row.locator('[data-act="copypw"]').click(); pg.wait_for_timeout(500)
+        check("Copy puts password on clipboard", pg.evaluate("navigator.clipboard.readText()") == PW)
+        row.locator('[data-act="reveal"]').click(); check("Hide re-masks", row.locator(".pwval").text_content() == "••••••••")
+        # edit: replace, then remove
+        pg.click(f'[data-act="qedit"][data-id="{a["id"]}"]'); pg.click('[data-act="fulledit"]'); pg.wait_for_selector("#f_password")
+        check("edit form says a password is saved", "saved" in pg.get_attribute("#f_password", "placeholder") and pg.locator("#f_pw_remove").count() == 1)
+        pg.fill("#f_password", "replaced-pw"); pg.click("#amSave"); pg.wait_for_timeout(700)
+        check("replace password via edit", httpx.post(f"{BASE}/api/accounts/{a['id']}/secret/reveal", json={}, auth=AUTH).json()["password"] == "replaced-pw")
+        pg.click(f'[data-act="qedit"][data-id="{a["id"]}"]'); pg.click('[data-act="fulledit"]'); pg.wait_for_selector("#f_pw_remove")
+        pg.check("#f_pw_remove"); pg.click("#amSave"); pg.wait_for_timeout(700)
+        check("remove password via edit", api("/api/accounts", q="js.vault.ui")["accounts"][0]["has_password"] is False)
+        pg.fill("#aq", ""); pg.wait_for_timeout(400)
+
+    po = new_page(viewport={"width": 1366, "height": 900}); po.add_init_script("localStorage.theme='dark'; localStorage.acctView='grid';")
     po.goto(BASE + "/#/accounts"); po.wait_for_selector(".agroup"); shot(po, "08_accounts_overview")
     shot(po, "08b_accounts_overview_full", full=True)
     # light theme + mobile
-    pl = b.new_page(viewport={"width": 1366, "height": 900}); pl.add_init_script("localStorage.theme='light'; localStorage.acctView='list';")
+    pl = new_page(viewport={"width": 1366, "height": 900}); pl.add_init_script("localStorage.theme='light'; localStorage.acctView='list';")
     pl.goto(BASE + "/#/accounts"); pl.wait_for_selector(".atable"); shot(pl, "13_accounts_table_light")
-    pm = b.new_page(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True); pm.add_init_script("localStorage.theme='dark'; localStorage.acctView='grid';")
+    pm = new_page(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True); pm.add_init_script("localStorage.theme='dark'; localStorage.acctView='grid';")
     pm.goto(BASE + "/#/accounts"); pm.wait_for_selector(".agroup"); shot(pm, "16_accounts_mobile")
     pm.click("#addAcct"); pm.wait_for_selector(".ptile"); shot(pm, "17_add_account_mobile")
     check("no JS errors", not errors, "; ".join(errors))

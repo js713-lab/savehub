@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS contacts(
   platform TEXT, account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL, notes TEXT,
   created_at TEXT, is_sample INTEGER DEFAULT 0, source TEXT);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS account_secrets(account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, cipher TEXT NOT NULL, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS vault_meta(k TEXT PRIMARY KEY, v TEXT);
 CREATE INDEX IF NOT EXISTS idx_items_saved ON items(saved_at);
 CREATE INDEX IF NOT EXISTS idx_items_platform ON items(platform);
 """

@@ -45,7 +45,7 @@ How it works: one uvicorn process binds `0.0.0.0:$PORT`. `/mcp` goes to the MCP 
 | Library: full-text search (EN/中文), sort by date saved / platform / author / title / relevance, platform chips, tag chips, account filter, card + table views, dark/light | ✅ tested |
 | Auto-tagging (tags + 1-line summary per item): OpenAI-compatible LLM if `OPENAI_API_KEY` or `XAI_API_KEY` set, else local keyword + TF-IDF tagger | ✅ local tagger tested · ⚠️ LLM path implemented, **not tested** (no key on build box) |
 | Summary/digest: counts by platform, top tags & authors, recent saves, written digest (AI if key, template otherwise) | ✅ template tested · ⚠️ AI digest untested |
-| Accounts: many accounts per platform; add/edit/delete; search/sort/filter; CSV import/export; items & contacts link via `account_id` | ✅ tested. **Passwords are never stored** (API rejects password/secret fields; CSV password columns are dropped) |
+| Accounts: many accounts per platform; add/edit/delete; search/sort/filter; CSV import/export; items & contacts link via `account_id` | ✅ tested. Plaintext passwords are never stored (generic account API rejects password/secret fields; CSV password columns are dropped) — see the encrypted vault below |
 | Accounts UX: guided **Add account** (pick app from tiles → form; `@` auto-prefix, profile URL auto-built for X/Threads/Instagram/Facebook/Messenger/TikTok/WhatsApp, inline validation, duplicate check, Enter/Esc, **Save & add another** with running count + undo), **Paste handles** bulk add with live preview (`POST /api/accounts/preview`, `POST /api/accounts/bulk`; lines like `@foo`, `ig @foo Name`, `foo, Name`, profile links), grouped-by-platform cards or table, platform/status segments with counts, search (`/`), sort, inline quick edit, delete with confirmation (+ undo when nothing is linked), toasts, empty state, mobile bottom-sheet, `GET /api/accounts/stats` | ✅ tested (`tests/accounts_ui_test.py`, headless Chromium, 30 checks) |
 | Contacts: vCard (.vcf) + CSV (Google/Outlook style) import, searchable, linkable to account | ✅ tested |
 | Importers (see below) | ✅ tested with the synthetic files in `samples/` — real exports vary; adjust if a field is missed |
@@ -127,3 +127,13 @@ Tools: `search_items, list_items, get_item, add_item, tag_items, get_summary, li
 
 ## Layout
 `savehub/db.py` storage+FTS · `tagger.py` AI/local tagging · `importers.py` · `summary.py` · `sync.py` (Notion/Drive) · `xoauth.py` · `app.py` REST API · `mcp_server.py` · `server.py` (combined single-port) · `seed.py` · `static/` UI
+
+## 🔐 Encrypted password vault (optional)
+Each account can optionally hold its login password, **encrypted at rest**.
+- **Crypto:** AES-256-GCM (`cryptography`), random 96-bit nonce per secret, account id bound as associated data. Key is derived from `SAVEHUB_VAULT_KEY` only (Fernet-style key → HKDF-SHA256; any other 16+ char passphrase → PBKDF2-HMAC-SHA256, 600k iterations; random per-DB salt). A key-check value detects a wrong/rotated key (refused, never garbage).
+- **Storage:** table `account_secrets(account_id, cipher)` holds only `v1:<base64(nonce|ciphertext|tag)>`. The key is never stored, logged or returned.
+- **Enabled only when** `SAVEHUB_VAULT_KEY` **and** `SAVEHUB_DASHBOARD_PASSWORD` are set. Otherwise the UI explains it is off and nothing is stored (no plaintext fallback, ever).
+- **API (dashboard login required, JSON + same-origin only, `Cache-Control: no-store`):** `GET /api/vault/status`, `PUT /api/accounts/{id}/secret {"password"}`, `POST /api/accounts/{id}/secret/reveal`, `DELETE /api/accounts/{id}/secret`. Account lists only expose `has_password`.
+- **Not exposed via MCP** (no tool accepts or returns passwords) and **never included in CSV export**.
+- ⚠️ **Render free tier has no persistent disk**: the DB — including saved passwords — is wiped on every restart/redeploy/idle spin-down. Attach a persistent disk (paid) and set `SAVEHUB_PERSISTENT_DISK=1`. Losing `SAVEHUB_VAULT_KEY` makes saved passwords unrecoverable.
+
