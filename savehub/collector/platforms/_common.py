@@ -67,7 +67,7 @@ def dig(d, *path, default=""):
 
 
 def short_hash(s: str, n=16) -> str:
-    return hashlib.sha1(s.encode("utf-8")).hexdigest()[:n]
+    return hashlib.sha1(s.encode("utf-8"), usedforsecurity=False).hexdigest()[:n]   # stable id, not a security hash
 
 
 def first_url(*cands) -> str:
@@ -240,6 +240,8 @@ class FeedCollector(Collector):
             touched = self.merge(raws, items, seen_here, label, cfg.max_items)
             ev(f"{P}.scroll", round=n, page=label or "saved", new=len(items) - before, seen=len(seen_here), total=len(items))
             if len(items) >= cfg.max_items and not label: ev(f"{P}.cap_reached", max_items=cfg.max_items); break
+            if cfg.stop_after_known and self.incremental_done(cfg, (items[r] for r in seen_here if r in items)):
+                ev(f"{P}.incremental_stop", page=label or "saved", known_seen=cfg.stop_after_known, total=len(items)); break
             if touched: idle = 0
             else:
                 if n == 0 and not seen_here and self._count(page, "empty"): ev(f"{P}.empty", page=label or "saved"); break

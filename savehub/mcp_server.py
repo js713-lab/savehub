@@ -4,7 +4,7 @@ streamable HTTP:  python -m savehub.mcp_server --http --port 8766   (endpoint /m
 Browser collector: login_status / collect (subprocess, SQLite sink; sessions per platform+account; SAVEHUB_COLLECT_TIMEOUT).
 Config/auth: SAVEHUB_ENABLED_PLATFORMS=x,instagram,xiaohongshu (limits what tools can read/write), SAVEHUB_DB=path.
 """
-import argparse, asyncio, base64, glob, importlib.util, json, os, shutil, signal, sys
+import argparse, asyncio, base64, hmac, importlib.util, json, os, signal, stat, sys
 from pathlib import Path
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
@@ -27,14 +27,23 @@ def transport_security() -> TransportSecuritySettings:
     return TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=origins)
 
 def mcp_token() -> str:
-    """Bearer token for HTTP MCP: $SAVEHUB_MCP_TOKEN, else a generated one persisted in data/.mcp_token."""
+    """Bearer token for HTTP MCP: $SAVEHUB_MCP_TOKEN, else a generated one persisted in data/.mcp_token (mode 0600).
+    The token value is never printed or logged; read it from that file."""
     t = os.environ.get("SAVEHUB_MCP_TOKEN", "").strip()
     if t: return t
     import secrets
     f = db.DB_PATH.parent / ".mcp_token"
-    if f.exists(): return f.read_text().strip()
-    f.parent.mkdir(parents=True, exist_ok=True); t = secrets.token_urlsafe(32); f.write_text(t)
-    print(f"[savehub] Generated MCP bearer token (saved to {f}): {t}", flush=True)
+    if f.exists():
+        try:
+            if os.stat(f).st_mode & 0o077: os.chmod(f, 0o600)
+        except OSError: pass
+        return f.read_text().strip()
+    f.parent.mkdir(parents=True, exist_ok=True); t = secrets.token_urlsafe(32)
+    old = os.umask(0o077)
+    try: fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    finally: os.umask(old)
+    with os.fdopen(fd, "w") as fh: fh.write(t)
+    print(f"[savehub] Generated an MCP bearer token and saved it to {f} (mode 0600; not printed).", flush=True)
     return t
 
 mcp = FastMCP("savehub", transport_security=transport_security(),
@@ -50,32 +59,22 @@ def _slim(it):
 # The collector package is imported lazily and never pulls in Playwright here (runs happen in a subprocess), so the
 # Render image (no Playwright/Chromium) keeps working and just reports the collector as unavailable.
 COLLECT_TIMEOUT_S = int(os.environ.get("SAVEHUB_COLLECT_TIMEOUT", "900"))     # per account; the run is killed after this
-_SECRET_ENV = ("PASSWORD", "SECRET", "TOKEN", "VAULT", "API_KEY", "PRIVATE")
-_running: set = set()
 
 def _col():
     from .collector import base, sessions, platforms  # noqa: F401  (registers every collector)
     return base, sessions
 
+def _rt():
+    from .collector import runtime
+    return runtime
+
+def __getattr__(name):            # `_running` = the process-wide per-account run set shared with auto-sync
+    if name == "_running": return _rt().RUNNING
+    raise AttributeError(name)
+
 def collector_runtime() -> dict:
     """Can this server run the browser collector? Cheap checks only (no browser launch)."""
-    on_render = bool(os.environ.get("RENDER") or os.environ.get("RENDER_EXTERNAL_HOSTNAME"))
-    where = " This server looks like the Render deployment, which has no browser: run collection on the box instead." if on_render else ""
-    if os.environ.get("SAVEHUB_COLLECTOR", "").lower() in ("0", "off", "false", "disabled"):
-        return {"available": False, "reason": "browser collector disabled on this server (SAVEHUB_COLLECTOR=off)." + where}
-    if importlib.util.find_spec("playwright") is None:
-        return {"available": False, "reason": "Playwright is not installed on this server (pip install -r requirements-collector.txt && playwright install chromium)." + where}
-    exe = os.environ.get("SAVEHUB_CHROME")
-    if exe: return {"available": os.path.exists(exe), "browser": exe, **({} if os.path.exists(exe) else {"reason": f"SAVEHUB_CHROME={exe} does not exist." + where})}
-    roots = [os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "", os.path.expanduser("~/.cache/ms-playwright"),
-             os.path.expanduser("~/Library/Caches/ms-playwright"), os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")]
-    for r in filter(None, roots):
-        hit = sorted(glob.glob(os.path.join(r, "chromium*")))
-        if hit: return {"available": True, "browser": "playwright:" + os.path.basename(hit[-1])}
-    from .collector.runner import SYSTEM_CHROMES
-    for c in SYSTEM_CHROMES:
-        if shutil.which(c) or os.path.exists(c): return {"available": True, "browser": c}
-    return {"available": False, "reason": "No Chromium found on this server (run: playwright install chromium)." + where}
+    return _rt().collector_runtime()
 
 def _accounts_rows(platform: str) -> dict:
     """account key -> SaveHub account row (id/display name) for this platform."""
@@ -144,33 +143,39 @@ def login_status(platform: str, account: Optional[str] = None) -> dict:
     return r
 
 def _child_env() -> dict:
-    """Environment for the collector subprocess: no passwords/tokens/keys (the SQLite sink needs none)."""
-    env = {k: v for k, v in os.environ.items() if not any(m in k.upper() for m in _SECRET_ENV)}
-    env["SAVEHUB_DB"] = str(db.DB_PATH); env["PYTHONUNBUFFERED"] = "1"
-    return env
+    """Environment for the collector subprocess: allow-listed, no passwords/tokens/keys (the SQLite sink needs none).
+    The vault key (to open encrypted session files) is written to the child's stdin instead (--key-stdin)."""
+    return _rt().child_env(db.DB_PATH)
+
+def _vault_key_for_child() -> str:
+    from . import vault
+    return vault.raw_key_for_child() if vault.session_key_available() else ""
 
 def _collect_cmd(platform: str, account_key: str, max_items: Optional[int], unsave: bool) -> list:
     _, sessions = _col()
-    cmd = [sys.executable, "-m", "savehub.collector", "--log-level", "WARNING", "--sessions-dir", str(sessions.sessions_dir()),
-           "collect", platform, "--sink", "sqlite", "--db", str(db.DB_PATH)]
+    cmd = [sys.executable, "-m", "savehub.collector", "--log-level", "WARNING"] + (["--key-stdin"] if _vault_key_for_child() else []) + \
+          ["--sessions-dir", str(sessions.sessions_dir()), "collect", platform, "--sink", "sqlite", "--db", str(db.DB_PATH)]
     if account_key and account_key != sessions.DEFAULT_ACCOUNT: cmd += ["--account", account_key]
     if max_items: cmd += ["--max-items", str(int(max_items))]
     if unsave is True: cmd += ["--unsave", "--unsave-confirm"]      # only on an explicit unsave=true
     return cmd
 
 async def _run_collect_proc(cmd: list, timeout: int) -> dict:
+    key = _vault_key_for_child() if "--key-stdin" in cmd else ""
     proc = await asyncio.create_subprocess_exec(*cmd, cwd=str(Path(__file__).resolve().parent.parent), env=_child_env(),
-                                                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-                                                stderr=asyncio.subprocess.PIPE, start_new_session=True)
+                                                stdin=asyncio.subprocess.PIPE if "--key-stdin" in cmd else asyncio.subprocess.DEVNULL,
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+        out, err = await asyncio.wait_for(proc.communicate((key + "\n").encode() if "--key-stdin" in cmd else None), timeout)
     except asyncio.TimeoutError:
         try: os.killpg(proc.pid, signal.SIGKILL)          # kill the browser children too
         except Exception: proc.kill()
         await proc.wait()
         return {"status": "timeout", "error": f"collection did not finish within {timeout}s and was stopped (raise SAVEHUB_COLLECT_TIMEOUT or lower max_items)"}
     try: res = json.loads(out.decode() or "{}")
-    except Exception: res = {"status": "error", "error": "collector produced no result", "log_tail": err.decode(errors="replace")[-800:]}
+    except Exception:
+        from .collector.logutil import scrub
+        res = {"status": "error", "error": "collector produced no result", "log_tail": scrub(err.decode(errors="replace")[-800:])}
     res["exit_code"] = proc.returncode
     return res
 
@@ -198,14 +203,18 @@ async def collect(platform: str, account: Optional[str] = None, max_items: Optio
     if not rt["available"]:
         return {"status": "browser_unavailable", "platform": platform, "error": "Cannot collect on this server: " + rt["reason"]}
     runs, unsave = [], unsave is True
+    rt_mod = _rt()
     for a in ready:
         key = sessions.account_key(a["account"])
         lock = (platform, key)
-        if lock in _running:
+        with rt_mod.RUNNING_LOCK:                 # shared with auto-sync / "Sync now": one run per account at a time
+            busy = lock in rt_mod.RUNNING
+            if not busy: rt_mod.RUNNING.add(lock)
+        if busy:
             runs.append({"account": a["account"], "status": "busy", "error": "a collection for this account is already running"}); continue
-        _running.add(lock)
         try: res = await _run_collect_proc(_collect_cmd(platform, key, max_items, unsave), COLLECT_TIMEOUT_S)
-        finally: _running.discard(lock)
+        finally:
+            with rt_mod.RUNNING_LOCK: rt_mod.RUNNING.discard(lock)
         res.pop("session_file", None)
         if isinstance(res.get("items"), list): res["items"] = res["items"][:25]
         res.setdefault("account", a["account"])
@@ -260,14 +269,40 @@ def get_summary(days: int = 7, use_ai: bool = True) -> dict:
     s = summary.get_summary(days, use_ai, enabled_only=enabled())
     s["recent"] = [_slim(i) for i in s["recent"]]; return s
 
+IMPORT_MAX_BYTES = 50_000_000
+
+def _safe_import_path(path: str) -> Path:
+    """import_file(path=...) may read local export files, but never SaveHub's own secrets or hidden/system files:
+    no session files, DB, vault/MCP key files, nothing under a dot-directory (.ssh, .git, .config, ...), /proc, /sys,
+    /dev, /etc; symlinks are resolved first; regular files only."""
+    _, sessions = _col()
+    p = Path(os.path.expanduser(str(path))).resolve()
+    data = db.DB_PATH.resolve().parent
+    deny_dirs = [sessions.sessions_dir().resolve(), Path("/proc"), Path("/sys"), Path("/dev"), Path("/etc")]
+    deny_files = {db.DB_PATH.resolve(), data / ".vault_key", data / ".mcp_token"}
+    try:
+        from . import vault
+        deny_files.add(vault.key_file_path().resolve())
+    except Exception: pass
+    bad = (any(p == d or d in p.parents for d in deny_dirs) or p in deny_files or p.name.startswith(str(db.DB_PATH.name) + "-")
+           or any(part.startswith(".") for part in p.parts[1:]))
+    if bad: raise ValueError("refusing to import from that path (SaveHub secrets, hidden or system files are off-limits)")
+    try: st = os.stat(p)
+    except OSError: raise ValueError("file not found") from None
+    if not stat.S_ISREG(st.st_mode): raise ValueError("not a regular file")
+    return p
+
 @mcp.tool()
 def import_file(path: str = "", kind: str = "auto", text: str = "", content_base64: str = "", platform: str = "", account_id: Optional[int] = None) -> dict:
     """Import a data-export file or pasted links. Provide a local file `path`, OR `text`, OR `content_base64`.
     kind: auto | instagram_json | facebook_json | threads_json | messenger_json | tiktok_json | whatsapp_txt | bookmarks_html | html | csv | json | paste | vcf | contacts_csv | accounts_csv"""
     fn = ""
     if path:
-        with open(os.path.expanduser(path), "rb") as f: data = f.read()
-        fn = os.path.basename(path)
+        try: p = _safe_import_path(path)
+        except ValueError as e: return {"error": str(e)}
+        with open(p, "rb") as f: data = f.read(IMPORT_MAX_BYTES + 1)
+        if len(data) > IMPORT_MAX_BYTES: return {"error": f"file too large (max {IMPORT_MAX_BYTES // 1_000_000} MB)"}
+        fn = p.name
     elif content_base64: data = base64.b64decode(content_base64)
     else: data = text
     if not data: return {"error": "nothing to import"}
@@ -302,13 +337,47 @@ def add_account(platform: str, display_name: str = "", handle: str = "", profile
                                    "linked_phone": linked_phone, "notes": notes, "tags": tags or [], "status": status, "connected_via": connected_via})
     return {"id": aid, "created": created, "account": db.get_account(aid)}
 
+# ---------------- auto-sync (near real-time incremental collection; never un-saves) ----------------
+def _autosync():
+    _col()
+    from .collector import autosync
+    return autosync
+
+@mcp.tool()
+def sync_status() -> dict:
+    """Auto-sync status: enabled, interval_minutes, whether this server can run a browser (available/reason), whether a sync
+    loop is running, and per logged-in account: state (synced | syncing | pending | needs_login | error | locked), last_success,
+    items_added_last_run/total, last_error, next_run. Read-only; never returns cookies or session file paths."""
+    return _autosync().status()
+
+@mcp.tool()
+def set_autosync(enabled: bool, interval_minutes: Optional[int] = None) -> dict:
+    """Turn auto-sync on/off and optionally set the interval (minutes, 2..1440). Auto-sync polls each logged-in account with an
+    incremental collect (stops at already-stored items) and NEVER un-saves anything. The running loop (CLI daemon
+    `python -m savehub.collector autosync` or the server with SAVEHUB_AUTOSYNC=1) picks the change up within ~15 s."""
+    a = _autosync()
+    if not isinstance(enabled, bool): return {"error": "enabled must be true or false"}
+    try: cfg = a.set_config(enabled=enabled, interval_minutes=interval_minutes)
+    except ValueError as e: return {"error": str(e)}
+    st = a.status()
+    r = {"enabled": cfg["enabled"], "interval_minutes": cfg["interval_minutes"], "available": st["available"], "loop": st["loop"], "unsave": "never"}
+    if not st["available"]: r["note"] = "This server cannot run a browser, so nothing will sync here: " + (st.get("reason") or "")
+    elif cfg["enabled"] and not st["loop"]["running"]:
+        r["note"] = "No auto-sync loop is running: start `python -m savehub.collector autosync` on the box, or run the server with SAVEHUB_AUTOSYNC=1."
+    return r
+
 class BearerAuth:
+    """Every request to the MCP endpoint (all tools, incl. collect / set_autosync / sync_status) needs the bearer token
+    (constant-time compare). WebSockets are refused outright."""
     def __init__(self, app, token): self.app, self.token = app, token
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and self.token:
-            h = dict(scope.get("headers") or [])
-            if h.get(b"authorization", b"").decode() != f"Bearer {self.token}":
-                await send({"type": "http.response.start", "status": 401, "headers": [(b"content-type", b"text/plain")]})
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1008}); return
+        if scope["type"] == "http":
+            got = dict(scope.get("headers") or []).get(b"authorization", b"")
+            if not self.token or not hmac.compare_digest(got, f"Bearer {self.token}".encode()):
+                await send({"type": "http.response.start", "status": 401, "headers": [(b"content-type", b"text/plain"), (b"www-authenticate", b"Bearer"),
+                                                                                      (b"x-content-type-options", b"nosniff"), (b"cache-control", b"no-store")]})
                 await send({"type": "http.response.body", "body": b"unauthorized"}); return
         await self.app(scope, receive, send)
 

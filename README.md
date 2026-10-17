@@ -121,6 +121,7 @@ Tools: `search_items, list_items, get_item, add_item, tag_items, get_summary, li
 .venv/bin/python tests/combined_server_test.py       # boots combined server on PORT=8900 with a fresh DB: /healthz, dashboard, REST, MCP auth/hosts/tools
 .venv/bin/python tests/screenshots.py                # headless screenshots → screenshots/
 .venv/bin/python -m pytest -q tests/collector_test.py   # browser collector: X parser on HTML fixtures, scroll/de-dupe, login detection, push to a temp SaveHub, unsave safety
+.venv/bin/python -m pytest -q tests/autosync_security_test.py   # auto-sync (incremental stop, backoff, needs-login, toggle, locks) + security (session perms/encryption, auth, CSRF, headers, log scrubbing)
 ```
 
 ## Sample data
@@ -229,3 +230,27 @@ No MCP tool takes or returns passwords, cookies or session contents.
 **Fragility:** this scrapes the web UI. When an app changes its markup, selectors break. They all live in `SEL` in
 `savehub/collector/platforms/<module>.py` (x, meta, bytedance, xiaohongshu, facebook, contacts), and `tests/fixtures/` mirrors the expected DOM/JSON. Automated use may hit
 rate limits, captchas or account checks. Keep runs small and infrequent, and use your own account only, at your own risk under the app's terms.
+
+## 🔄 Auto-sync (near real-time, local / self-hosted only)
+The apps have no push API, so SaveHub polls instead: every N minutes (default **10**, min 2) each valid saved session on an
+implemented collector gets a small **incremental** collect. It stops paginating once it sees 3 already-stored items (saved lists
+are newest-first) and pushes only the new ones (cap 30 per run; 100 on an account's first sync). Auto-sync **never un-saves**.
+
+```bash
+python -m savehub.collector autosync                 # loop (enables auto-sync, interval from the dashboard / last --interval)
+python -m savehub.collector autosync --interval 5    # persist a new interval
+python -m savehub.collector autosync --once          # one pass over every valid session now, then exit
+python -m savehub.collector autosync --platform x --platform instagram
+SAVEHUB_AUTOSYNC=1 python -m savehub.server          # or run the loop inside the combined server (only if a browser is available)
+```
+- One run per account at a time (cross-process lock, shared with MCP `collect` and "Sync now"); per-account timeout
+  (`SAVEHUB_AUTOSYNC_TIMEOUT`, 300 s, process group killed); errors back off exponentially (1×, 2×, 4× … the interval, max 6 h).
+- An expired/rejected session is marked **needs login** and is not retried until its session file changes (you logged in again).
+- State per account (last run, last success, items added, last error, next run) is stored in the DB (`sync_state`).
+- Dashboard → Accounts: Auto-sync toggle + interval, per-account status ("Synced 3 min ago · +2 new" / "Needs login" / "Error")
+  and **Sync now** per account or for all (rate-limited, never un-saves).
+- MCP: `sync_status()` and `set_autosync(enabled: bool, interval_minutes: Optional[int] = None)`.
+- On Render (no browser) it stays off and reports `available: false`; it never crashes the server.
+
+Security model (session files, encryption at rest, what MCP can and cannot do): see [SECURITY.md](SECURITY.md).
+

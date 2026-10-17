@@ -2,14 +2,19 @@
 
 * Algorithm: AES-256-GCM (cryptography's AESGCM), random 96-bit nonce per secret, and the account id as
   associated data (a ciphertext copied onto another account will not decrypt).
-* Key: derived ONLY from the env var SAVEHUB_VAULT_KEY (never stored, logged or returned).
+* Key: SAVEHUB_VAULT_KEY from the environment, else a key file (SAVEHUB_VAULT_KEY_FILE, default <db dir>/.vault_key,
+  mode 0600, git-ignored), else a key handed to a collector subprocess on stdin (set_runtime_key). Never logged or returned.
   - a Fernet-style key (urlsafe-base64 of 32 random bytes; e.g. `Fernet.generate_key()`) -> HKDF-SHA256
   - any other passphrase (>= 16 chars)                                                 -> PBKDF2-HMAC-SHA256, 600k iterations
   The KDF salt is random per database (table vault_meta; not secret).
 * Storage: table account_secrets(account_id, cipher) holds only "v1:<base64(nonce|ciphertext|tag)>".
 * No key set (or no dashboard login configured) => vault disabled; nothing is ever stored in plaintext.
+* The same master key also encrypts browser-session files at rest (encrypt_session / decrypt_session): a separate
+  AES-256-GCM key is derived per file salt (HKDF info "savehub-session-aes256gcm-v1" / PBKDF2), independent of the DB,
+  with the session's "<platform>@<account>" as associated data. This needs no dashboard login (sessions never leave the box).
 """
-import base64, hashlib, os, threading
+import base64, hashlib, os, stat, threading
+from pathlib import Path
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -42,8 +47,55 @@ def _salt():
         s = base64.b64encode(os.urandom(16)).decode(); _meta("kdf_salt", s)
     return base64.b64decode(s)
 
+_runtime_key = ""
+
+def set_runtime_key(k: str):
+    """Key passed in-memory (collector subprocess reads it from stdin; it is never put in the child's environment)."""
+    global _runtime_key
+    _runtime_key = (k or "").strip()
+
+def key_file_path() -> Path:
+    return Path(os.environ.get("SAVEHUB_VAULT_KEY_FILE") or (Path(db.DB_PATH).parent / ".vault_key"))
+
+def _read_key_file() -> str:
+    p = key_file_path()
+    try:
+        st = os.stat(p)
+    except OSError:
+        return ""
+    if not stat.S_ISREG(st.st_mode): return ""
+    if st.st_mode & 0o077:                       # tighten a group/world-readable key file instead of using it as-is
+        try: os.chmod(p, 0o600)
+        except OSError: return ""
+    try: return p.read_text().strip()
+    except OSError: return ""
+
+def key_source() -> str:
+    """'env' | 'runtime' | 'file' | '' (no key). Never the key itself."""
+    if os.environ.get(ENV, "").strip(): return "env"
+    if _runtime_key: return "runtime"
+    return "file" if _read_key_file() else ""
+
 def _raw_key():
-    return os.environ.get(ENV, "").strip()
+    return os.environ.get(ENV, "").strip() or _runtime_key or _read_key_file()
+
+def raw_key_for_child() -> str:
+    """The master key, only to be written to a collector subprocess's stdin pipe (never env/argv/logs)."""
+    return _raw_key()
+
+def generate_key_file(path=None) -> Path:
+    """Create a fresh Fernet-style key file (mode 0600, O_EXCL so an existing key is never overwritten)."""
+    from cryptography.fernet import Fernet
+    p = Path(path) if path else key_file_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    old = os.umask(0o077)
+    try:
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    finally:
+        os.umask(old)
+    with os.fdopen(fd, "w") as f: f.write(Fernet.generate_key().decode() + "\n")
+    os.chmod(p, 0o600)
+    return p
 
 def _fernet_bytes(raw):
     try:
@@ -130,3 +182,42 @@ def ids_with_secret():
 
 def count():
     return db.conn().execute("SELECT count(*) FROM account_secrets").fetchone()[0]
+
+
+# ---------------- browser-session files at rest (no DB needed: the KDF salt is stored in each file) ----------------
+SESSION_INFO = b"savehub-session-aes256gcm-v1"
+_session_cache: dict = {}
+_proc_salt = os.urandom(16)
+
+def session_key_available() -> bool:
+    raw = _raw_key()
+    return bool(raw) and (_fernet_bytes(raw) is not None or len(raw) >= 16)
+
+def _session_key(salt: bytes):
+    raw = _raw_key()
+    if not raw: raise VaultDisabled(f"session file is encrypted: set {ENV} (or the key file) to use it")
+    fb = _fernet_bytes(raw)
+    if fb is None and len(raw) < 16: raise VaultDisabled(f"{ENV} is too short to encrypt session files")
+    ck = hashlib.sha256(b"session|" + raw.encode() + b"|" + salt).digest()
+    with _lock:
+        if ck not in _session_cache:
+            if fb is not None:
+                k, kdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=salt, info=SESSION_INFO).derive(fb), "hkdf-sha256"
+            else:
+                k, kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=600_000).derive(raw.encode()), "pbkdf2-sha256-600k"
+            if len(_session_cache) > 32: _session_cache.clear()
+            _session_cache[ck] = (k, kdf)
+        return _session_cache[ck]
+
+def encrypt_session(plaintext: bytes, aad: bytes) -> dict:
+    k, kdf = _session_key(_proc_salt)
+    return {"savehub_encrypted": 1, "enc": "AES-256-GCM", "kdf": kdf, "salt": base64.b64encode(_proc_salt).decode(),
+            "data": _enc(k, plaintext, aad)}
+
+def decrypt_session(doc: dict, aad: bytes) -> bytes:
+    try: salt = base64.b64decode(doc["salt"])
+    except Exception: raise VaultError("malformed encrypted session file")
+    k, _ = _session_key(salt)
+    try: return _dec(k, str(doc.get("data") or ""), aad)
+    except (InvalidTag, ValueError):
+        raise VaultKeyMismatch("cannot decrypt the session file: wrong SAVEHUB_VAULT_KEY, or the file was renamed/tampered with")

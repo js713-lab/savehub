@@ -113,7 +113,7 @@ def tag_item(item):
 def retag(ids=None, force=False):
     from . import db
     c = db.conn()
-    q = "SELECT * FROM items" + (f" WHERE id IN ({','.join('?'*len(ids))})" if ids else ("" if force else " WHERE tags='[]' OR tags IS NULL"))
+    q = "SELECT * FROM items" + (f" WHERE id IN ({','.join('?'*len(ids))})" if ids else ("" if force else " WHERE tags='[]' OR tags IS NULL"))  # nosec B608 - only '?' placeholders are interpolated
     n = 0
     for r in c.execute(q, ids or []).fetchall():
         t = tag_item(dict(r)); db.update_item(r["id"], t); n += 1

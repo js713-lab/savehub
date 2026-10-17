@@ -165,3 +165,17 @@ code{font:12px ui-monospace,monospace;background:var(--panel2);padding:0 4px;bor
 .avatar .pdot{display:grid;place-items:center;overflow:hidden}.avatar .pdot .plogo{width:62%;height:62%;object-fit:contain}
 .avatar .pdot[data-logo=xiaohongshu] .plogo{width:90%;height:90%}
 [data-theme=dark] .avatar .pdot:is([data-logo=x],[data-logo=threads],[data-logo=tiktok],[data-logo=douyin]){box-shadow:0 0 0 1px rgba(255,255,255,.3)}
+
+/* auto-sync */
+.vstrip.sync{flex-wrap:wrap}.vstrip.sync .chk{gap:6px}.vstrip.sync select{padding:3px 6px;font-size:12px}.vstrip.sync .grow{flex:1;min-width:180px}
+.vstrip.sync:not(.on)>svg{color:var(--muted)}.warntxt{color:var(--warn)}
+.syncrow{display:flex;gap:7px;align-items:center;font-size:12px;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:3px 5px 3px 9px;min-width:0}
+.syncrow .stxt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.syncrow svg{flex:none}
+.syncrow.st-synced svg{color:var(--ok)}.syncrow.st-syncing svg{color:var(--accent2);animation:spin 1.2s linear infinite}
+.syncrow.st-needs_login,.syncrow.st-locked{border-color:color-mix(in srgb,var(--warn) 45%,var(--border))}.syncrow.st-needs_login svg,.syncrow.st-locked svg{color:var(--warn)}
+.syncrow.st-error{border-color:color-mix(in srgb,#e5484d 45%,var(--border))}.syncrow.st-error svg{color:#e5484d}
+.tacct .syncrow{margin-top:4px;max-width:260px}
+.syncorph{display:flex;flex-wrap:wrap;gap:8px;margin:-2px 0 10px}.syncchip{display:flex;gap:8px;align-items:center;font-size:12px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:4px 6px 4px 8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.syncrow.st-syncing svg{animation:none}}
+.syncrow .btn{white-space:nowrap;flex:none}

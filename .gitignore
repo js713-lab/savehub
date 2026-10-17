@@ -10,3 +10,9 @@ data/export/
 *.zip
 data/*
 !data/.gitkeep
+# browser sessions (= logged-in cookies) and keys: never commit (also covered by data/*)
+data/sessions/
+data/.vault_key
+data/.mcp_token
+data/.autosync.lock
+*.tmp

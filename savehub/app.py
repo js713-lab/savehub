@@ -1,6 +1,13 @@
-"""SaveHub web app + REST API."""
-import os, re
+"""SaveHub web app + REST API.
+
+Security model (see SECURITY.md): HTTP Basic dashboard login when SAVEHUB_DASHBOARD_PASSWORD is set (enforced by the
+ASGI dispatcher in server.py, by main() here, and again inside sensitive endpoints); same-origin check on every
+state-changing /api request; security headers (CSP, X-Frame-Options DENY, nosniff, Referrer-Policy, ...) on every
+response; no cookies are set at all (Basic auth only, so there is no session cookie to steal or forge).
+"""
+import ipaddress, os, re, time
 from typing import Optional
+from urllib.parse import urlsplit
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -8,6 +15,42 @@ from . import auth, db, importers, summary, sync, tagger, vault, xoauth
 
 app = FastAPI(title="SaveHub", version="1.0")
 STATIC = db.ROOT / "static"
+
+# ---- security headers + same-origin (CSRF) guard ----
+# 'unsafe-inline' for scripts is still needed by the dashboard's inline on* handlers; everything else is locked to
+# 'self' (no third-party scripts, no framing, no plugins, fetch/XHR only to this origin).
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; "
+       "media-src 'self' https:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; "
+       "frame-ancestors 'none'; form-action 'self'")
+SEC_HEADERS = {"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+               "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+               "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Resource-Policy": "same-origin"}
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+def same_origin(req) -> bool:
+    """Browsers always send Origin (and Sec-Fetch-Site) on cross-site state-changing requests; non-browser clients
+    (CLI collector, curl, tests) send neither and are governed by the login instead."""
+    sfs = (req.headers.get("sec-fetch-site") or "").lower()
+    if sfs and sfs not in ("same-origin", "none"): return False
+    origin = req.headers.get("origin")
+    if origin is None: return True
+    if origin == "null": return False
+    host = (req.headers.get("x-forwarded-host") or req.headers.get("host") or "").split(",")[0].strip().lower()
+    return urlsplit(origin).netloc.lower() == host and bool(host)
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    path = request.url.path
+    if request.method in UNSAFE_METHODS and path.startswith("/api/") and not same_origin(request):
+        resp = JSONResponse({"detail": "cross-origin request refused"}, status_code=403)
+    else:
+        resp = await call_next(request)
+    for k, v in SEC_HEADERS.items(): resp.headers.setdefault(k, v)
+    if not path.startswith(("/docs", "/redoc")): resp.headers.setdefault("Content-Security-Policy", CSP)
+    if path.startswith("/api/"): resp.headers.setdefault("Cache-Control", "no-store")
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").split(",")[0].strip()
+    if proto == "https": resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return resp
 
 def _csv(v): return [x for x in (v or "").split(",") if x]
 
@@ -181,6 +224,62 @@ def del_account(aid: int): db.delete_account(aid); return {"ok": True}
 def export_accounts():
     return PlainTextResponse(importers.export_accounts_csv(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=savehub_accounts.csv"})
 
+# ---- auto-sync (browser collector, incremental, never un-saves) ----
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+def _is_loopback(h: str) -> bool:
+    try: return ipaddress.ip_address((h or "").strip("[]")).is_loopback
+    except ValueError: return False
+
+def _host_only(h: str) -> str:
+    h = h.strip().lower()
+    if h.startswith("["): return h[1:h.find("]")] if "]" in h else h
+    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+
+def _admin_guard(req: Request, write: bool = True):
+    """Auto-sync endpoints: with a dashboard password -> HTTP Basic verified here (not only by the dispatcher);
+    without one -> only from this machine (loopback client AND a loopback Host header, which also defeats DNS
+    rebinding and makes them unusable on a password-less public deployment). Writes must be JSON + same-origin."""
+    if auth.login_configured():
+        if not auth.basic_ok(req.headers.get("authorization", "")): raise HTTPException(401, "login required", headers={"WWW-Authenticate": 'Basic realm="SaveHub"'})
+    else:
+        if not (_is_loopback(req.client.host if req.client else "") and _host_only(req.headers.get("host") or "") in _LOOPBACK_HOSTS):
+            raise HTTPException(403, "auto-sync can only be managed from this machine unless a dashboard login is configured (SAVEHUB_DASHBOARD_PASSWORD)")
+    if write:
+        if "application/json" not in req.headers.get("content-type", ""): raise HTTPException(415, "application/json required")
+        if not same_origin(req): raise HTTPException(403, "cross-origin request refused")
+
+def _autosync():
+    from .collector import autosync, platforms  # noqa: F401  (registers collectors; no Playwright import)
+    return autosync
+
+@app.get("/api/autosync")
+def autosync_status(req: Request):
+    _admin_guard(req, write=False)
+    return _autosync().status()
+
+@app.put("/api/autosync")
+async def autosync_config(req: Request):
+    _admin_guard(req)
+    d = await req.json()
+    if not isinstance(d, dict) or set(d) - {"enabled", "interval_minutes"}: raise HTTPException(400, "only 'enabled' and 'interval_minutes' can be set")
+    try: _autosync().set_config(enabled=d.get("enabled"), interval_minutes=d.get("interval_minutes"))
+    except ValueError as e: raise HTTPException(400, str(e))
+    return _autosync().status()
+
+@app.post("/api/autosync/run")
+async def autosync_run(req: Request):
+    """'Sync now' for one account ({platform, account}) or everything ({}). Rate-limited; un-save is impossible here."""
+    _admin_guard(req)
+    d = await req.json() if (await req.body()) else {}
+    if not isinstance(d, dict) or set(d) - {"platform", "account"}: raise HTTPException(400, "only 'platform' and 'account' are accepted (un-save is never available here)")
+    a = _autosync()
+    try: r = a.request_sync(d.get("platform") or None, d.get("account") or None)
+    except ValueError as e: raise HTTPException(400, str(e))
+    except a.Unavailable as e: raise HTTPException(503, f"auto-sync unavailable on this server: {e}")
+    except a.RateLimited as e: raise HTTPException(429, str(e), headers={"Retry-After": str(e.retry_after)})
+    return JSONResponse(r, status_code=202)
+
 # ---- settings ----
 def _redact(s):
     s = dict(s); s.pop("x_tokens", None)
@@ -213,19 +312,32 @@ def x_auth():
 
 @app.get("/api/x/callback")
 def x_callback(code: str = "", state: str = "", error: str = ""):
-    if error: return RedirectResponse(f"/#/connect?x_error={error}")
+    from urllib.parse import quote
+    if error: return RedirectResponse(f"/#/connect?x_error={quote(error[:100])}")
     try: xoauth.handle_callback(code, state); return RedirectResponse("/#/connect?x=connected")
-    except Exception as e: return RedirectResponse(f"/#/connect?x_error={str(e)[:100]}")
+    except Exception as e: return RedirectResponse(f"/#/connect?x_error={quote(str(e)[:100])}")
 
 @app.post("/api/x/sync")
 def x_sync():
     try: return xoauth.sync_bookmarks()
     except Exception as e: raise HTTPException(400, f"X sync failed: {e}")
 
+def basic_auth_gate(inner):
+    """ASGI wrapper: when a dashboard password is set, every request except /healthz needs HTTP Basic auth.
+    Used by main() so `python -m savehub.app` enforces the login exactly like the combined server does."""
+    async def gate(scope, receive, send):
+        if scope["type"] == "http" and auth.login_configured() and scope.get("path") != "/healthz":
+            if not auth.basic_ok(dict(scope.get("headers") or []).get(b"authorization", b"")):
+                await send({"type": "http.response.start", "status": 401, "headers": [(b"www-authenticate", b'Basic realm="SaveHub"'), (b"content-type", b"text/plain"),
+                                                                                      (b"x-content-type-options", b"nosniff"), (b"x-frame-options", b"DENY")]})
+                await send({"type": "http.response.body", "body": b"login required"}); return
+        await inner(scope, receive, send)
+    return gate
+
 def main():
     import uvicorn
     from . import seed
     seed.seed()
-    uvicorn.run(app, host=os.environ.get("SAVEHUB_HOST", "127.0.0.1"), port=int(os.environ.get("SAVEHUB_PORT", 8765)))
+    uvicorn.run(basic_auth_gate(app), host=os.environ.get("SAVEHUB_HOST", "127.0.0.1"), port=int(os.environ.get("SAVEHUB_PORT", 8765)))
 
 if __name__ == "__main__": main()

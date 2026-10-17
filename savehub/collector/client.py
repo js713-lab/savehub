@@ -79,6 +79,16 @@ class RestSink:
         r = self._req("POST", "/api/accounts", json={"platform": platform, "handle": h, "display_name": h, "connected_via": "collector"})
         return r.json().get("id") if r.status_code == 200 else None
 
+    def known_keys(self, platform: str, limit: int = 500) -> set:
+        """Incremental mode: urls (+ "id:<external_id>") of the newest stored items of this platform."""
+        r = self._req("GET", "/api/items", params={"platform": platform, "sort": "created_at", "order": "desc", "limit": int(limit)})
+        if r.status_code != 200: raise PushError(f"could not read stored items for incremental sync: HTTP {r.status_code}")
+        out = set()
+        for it in r.json().get("items", []):
+            if it.get("url"): out.add(it["url"])
+            if it.get("external_id"): out.add("id:" + str(it["external_id"]))
+        return out
+
     def push(self, item: CollectedItem, account_id=None, collected_at="") -> PushResult:
         res = PushResult(item)
         try:
@@ -120,6 +130,13 @@ class SqliteSink:
         if aid is not None: return aid
         h = "@" + handle.lstrip("@")
         return self.db.add_account({"platform": platform, "handle": h, "display_name": h, "connected_via": "collector"})[0]
+
+    def known_keys(self, platform: str, limit: int = 5000) -> set:
+        out = set()
+        for r in self.db.conn().execute("SELECT url, external_id FROM items WHERE platform=? ORDER BY id DESC LIMIT ?", (platform, int(limit))):
+            if r["url"]: out.add(r["url"])
+            if r["external_id"]: out.add("id:" + str(r["external_id"]))
+        return out
 
     def push(self, item, account_id=None, collected_at="") -> PushResult:
         res = PushResult(item)

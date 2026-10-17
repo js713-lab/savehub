@@ -61,7 +61,7 @@ async def stdio_test():
                 elif isinstance(res, dict) and name == "get_item": brief = {k: res.get(k) for k in ("id", "title", "tags")}
                 else: brief = res
                 print(f"  {name}({json.dumps(args, ensure_ascii=False)[:70]}) -> {json.dumps(brief, ensure_ascii=False)[:300]}")
-            assert {"login_status", "collect"} <= set(tools) and len(tools) == 15, tools
+            assert {"login_status", "collect"} <= set(tools) and len(tools) == 17, tools
             assert not fails, fails
             print("STDIO: all tool calls OK")
 

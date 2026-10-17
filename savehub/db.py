@@ -37,7 +37,9 @@ def conn():
     c = getattr(_local, "c", None)
     if c is None:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        c = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+        old = os.umask(0o077)                    # a new DB (+ -wal/-shm) is created owner-only
+        try: c = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+        finally: os.umask(old)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA foreign_keys=ON")
@@ -71,9 +73,24 @@ CREATE TABLE IF NOT EXISTS contacts(
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS account_secrets(account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, cipher TEXT NOT NULL, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS vault_meta(k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS sync_state(
+  platform TEXT NOT NULL, account TEXT NOT NULL, status TEXT, running INTEGER DEFAULT 0, last_run REAL, last_success REAL,
+  last_added INTEGER DEFAULT 0, total_added INTEGER DEFAULT 0, last_collected INTEGER DEFAULT 0, last_error TEXT,
+  consecutive_errors INTEGER DEFAULT 0, next_run REAL, session_mtime REAL, last_reason TEXT, updated_at REAL,
+  PRIMARY KEY(platform, account));
+CREATE TABLE IF NOT EXISTS autosync_meta(k TEXT PRIMARY KEY, v TEXT);
 CREATE INDEX IF NOT EXISTS idx_items_saved ON items(saved_at);
 CREATE INDEX IF NOT EXISTS idx_items_platform ON items(platform);
 """
+
+def harden_files():
+    """Owner-only permissions for the DB (+ -wal/-shm) and SaveHub's key/token files next to it (permissions only)."""
+    d = DB_PATH.parent; fixed = 0
+    for f in (DB_PATH, Path(str(DB_PATH) + "-wal"), Path(str(DB_PATH) + "-shm"), d / ".mcp_token", d / ".vault_key"):
+        try:
+            if f.is_file() and not f.is_symlink() and f.stat().st_mode & 0o077: os.chmod(f, 0o600); fixed += 1
+        except OSError: pass
+    return fixed
 
 def init(c):
     c.executescript(SCHEMA)
@@ -127,14 +144,14 @@ def add_item(d, tag=True):
         ex = c.execute("SELECT id FROM items WHERE platform=? AND url=?", (d["platform"], d["url"])).fetchone()
         if ex: return ex["id"], False
     cols = [f for f in ITEM_FIELDS if f in d]
-    cur = c.execute(f"INSERT INTO items({','.join(cols)},created_at) VALUES({','.join('?'*len(cols))},?)", [d[f] for f in cols] + [now_iso()])
+    cur = c.execute(f"INSERT INTO items({','.join(cols)},created_at) VALUES({','.join('?'*len(cols))},?)", [d[f] for f in cols] + [now_iso()])  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
     c.commit(); return cur.lastrowid, True
 
 def update_item(item_id, d):
     d = {k: v for k, v in d.items() if k in ITEM_FIELDS}
     if "tags" in d: d["tags"] = json.dumps(d["tags"], ensure_ascii=False)
     if not d: return
-    c = conn(); c.execute(f"UPDATE items SET {','.join(k+'=?' for k in d)} WHERE id=?", list(d.values()) + [item_id]); c.commit()
+    c = conn(); c.execute(f"UPDATE items SET {','.join(k+'=?' for k in d)} WHERE id=?", list(d.values()) + [item_id]); c.commit()  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
 
 def get_item(item_id):
     r = rows(conn().execute("SELECT i.*, a.display_name AS account_name, a.handle AS account_handle FROM items i LEFT JOIN accounts a ON a.id=i.account_id WHERE i.id=?", (item_id,)))
@@ -170,8 +187,8 @@ def list_items(q="", platforms=None, tags=None, account_id=None, sort="saved_at"
     if sort == "relevance" and join: ob = "bm25(items_fts)"
     else: ob = SORTS.get(sort, "i.saved_at") + (" ASC" if str(order).lower() == "asc" else " DESC")
     c = conn()
-    total = c.execute(f"SELECT count(*) FROM items i {join} {w}", args).fetchone()[0]
-    res = rows(c.execute(f"SELECT i.*, a.display_name AS account_name, a.handle AS account_handle FROM items i {join} LEFT JOIN accounts a ON a.id=i.account_id {w} ORDER BY {ob}, i.id DESC LIMIT ? OFFSET ?", args + [int(limit), int(offset)]))
+    total = c.execute(f"SELECT count(*) FROM items i {join} {w}", args).fetchone()[0]  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
+    res = rows(c.execute(f"SELECT i.*, a.display_name AS account_name, a.handle AS account_handle FROM items i {join} LEFT JOIN accounts a ON a.id=i.account_id {w} ORDER BY {ob}, i.id DESC LIMIT ? OFFSET ?", args + [int(limit), int(offset)]))  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
     return {"total": total, "items": res}
 
 def all_tags(limit=100):
@@ -179,7 +196,7 @@ def all_tags(limit=100):
 
 def clear_samples():
     c = conn()
-    n = {t: c.execute(f"DELETE FROM {t} WHERE is_sample=1").rowcount for t in ("items", "contacts", "accounts")}
+    n = {t: c.execute(f"DELETE FROM {t} WHERE is_sample=1").rowcount for t in ("items", "contacts", "accounts")}  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
     c.commit(); return n
 
 def stats():
@@ -202,7 +219,7 @@ def add_contact(d):
     ex = c.execute("SELECT id FROM contacts WHERE name=? AND phones=? AND emails=?", (d.get("name"), d["phones"], d["emails"])).fetchone()
     if ex: return ex["id"], False
     cols = list(d)
-    cur = c.execute(f"INSERT INTO contacts({','.join(cols)},created_at) VALUES({','.join('?'*len(cols))},?)", list(d.values()) + [now_iso()])
+    cur = c.execute(f"INSERT INTO contacts({','.join(cols)},created_at) VALUES({','.join('?'*len(cols))},?)", list(d.values()) + [now_iso()])  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
     c.commit(); return cur.lastrowid, True
 
 def search_contacts(q="", account_id=None, platform=None, sort="name", order="asc", limit=100, offset=0):
@@ -216,8 +233,8 @@ def search_contacts(q="", account_id=None, platform=None, sort="name", order="as
     col = {"name": "lower(c.name)", "org": "lower(c.org)", "created_at": "c.created_at", "platform": "c.platform"}.get(sort, "lower(c.name)")
     o = "DESC" if str(order).lower() == "desc" else "ASC"
     cc = conn()
-    total = cc.execute(f"SELECT count(*) FROM contacts c {w}", args).fetchone()[0]
-    return {"total": total, "contacts": rows(cc.execute(f"SELECT c.*, a.display_name AS account_name FROM contacts c LEFT JOIN accounts a ON a.id=c.account_id {w} ORDER BY {col} {o} LIMIT ? OFFSET ?", args + [limit, offset]))}
+    total = cc.execute(f"SELECT count(*) FROM contacts c {w}", args).fetchone()[0]  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
+    return {"total": total, "contacts": rows(cc.execute(f"SELECT c.*, a.display_name AS account_name FROM contacts c LEFT JOIN accounts a ON a.id=c.account_id {w} ORDER BY {col} {o} LIMIT ? OFFSET ?", args + [limit, offset]))}  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
 
 def delete_contact(cid):
     c = conn(); c.execute("DELETE FROM contacts WHERE id=?", (cid,)); c.commit()
@@ -235,7 +252,7 @@ def add_account(d):
         ex = c.execute("SELECT id FROM accounts WHERE platform=? AND lower(handle)=lower(?)", (d["platform"], d["handle"])).fetchone()
         if ex: return ex["id"], False
     cols = list(d)
-    cur = c.execute(f"INSERT INTO accounts({','.join(cols)}) VALUES({','.join('?'*len(cols))})", list(d.values()))
+    cur = c.execute(f"INSERT INTO accounts({','.join(cols)}) VALUES({','.join('?'*len(cols))})", list(d.values()))  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
     c.commit(); return cur.lastrowid, True
 
 def update_account(aid, d):
@@ -245,7 +262,7 @@ def update_account(aid, d):
         if isinstance(t, str): t = [x.strip() for x in t.split(",") if x.strip()]
         d["tags"] = json.dumps(t, ensure_ascii=False)
     if not d: return
-    c = conn(); c.execute(f"UPDATE accounts SET {','.join(k+'=?' for k in d)} WHERE id=?", list(d.values()) + [aid]); c.commit()
+    c = conn(); c.execute(f"UPDATE accounts SET {','.join(k+'=?' for k in d)} WHERE id=?", list(d.values()) + [aid]); c.commit()  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
 
 def delete_account(aid):
     c = conn(); c.execute("DELETE FROM accounts WHERE id=?", (aid,)); c.commit()
@@ -266,6 +283,6 @@ def list_accounts(q="", platform=None, status=None, sort="platform", order="asc"
     col = {"platform": "platform, lower(display_name)", "display_name": "lower(display_name)", "handle": "lower(handle)", "created_at": "created_at", "status": "status"}.get(sort, "platform")
     o = "DESC" if str(order).lower() == "desc" else "ASC"
     c = conn()
-    total = c.execute(f"SELECT count(*) FROM accounts a {w}", args).fetchone()[0]
-    res = rows(c.execute(f"SELECT a.*, (SELECT count(*) FROM items i WHERE i.account_id=a.id) AS item_count, (SELECT count(*) FROM contacts k WHERE k.account_id=a.id) AS contact_count FROM accounts a {w} ORDER BY {col} {o} LIMIT ? OFFSET ?", args + [limit, offset]))
+    total = c.execute(f"SELECT count(*) FROM accounts a {w}", args).fetchone()[0]  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
+    res = rows(c.execute(f"SELECT a.*, (SELECT count(*) FROM items i WHERE i.account_id=a.id) AS item_count, (SELECT count(*) FROM contacts k WHERE k.account_id=a.id) AS contact_count FROM accounts a {w} ORDER BY {col} {o} LIMIT ? OFFSET ?", args + [limit, offset]))  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
     return {"total": total, "accounts": res}

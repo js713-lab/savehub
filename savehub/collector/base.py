@@ -9,6 +9,7 @@ log = logging.getLogger("savehub.collector")
 
 # exit codes used by the CLI
 EXIT_OK, EXIT_ERROR, EXIT_NEED_LOGIN, EXIT_NOT_IMPLEMENTED, EXIT_PUSH_FAILED = 0, 1, 2, 3, 4
+EXIT_BUSY, EXIT_LOCKED = 5, 6      # another run holds this account's lock | encrypted session and no/wrong key
 
 
 class CollectorError(Exception):
@@ -30,6 +31,11 @@ class NeedLogin(CollectorError):
 
 class NotImplementedPlatform(CollectorError, NotImplementedError):
     exit_code = EXIT_NOT_IMPLEMENTED
+
+
+class AccountBusy(CollectorError):
+    """Another collect run (any process: CLI, MCP, auto-sync) holds this account's lock."""
+    exit_code = EXIT_BUSY
 
 
 @dataclass
@@ -81,14 +87,17 @@ class RunConfig:
     account_id: Optional[int] = None    # SaveHub account row to link items to (default: resolved/created from account_handle)
     account_handle: str = ""            # which logged-in account to collect from: selects session <platform>@<handle>.json,
                                         # tags items source=collector:<platform>:<handle> and links them to that account row
+    known: set = field(default_factory=set, repr=False)   # incremental mode: urls + "id:<external_id>" already stored
+    stop_after_known: int = 0           # incremental mode: stop paginating once this many already-stored items were seen (0 = off)
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "RunConfig":
         d = d or {}
-        known = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
-        unknown = set(d) - set(known)
+        kv = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        unknown = set(d) - set(kv)
         if unknown: log.warning("ignoring unknown config keys: %s", sorted(unknown))
-        return cls(**known)
+        if "known" in kv: kv["known"] = set(kv["known"] or ())
+        return cls(**kv)
 
     @property
     def unsave_mode(self) -> str:
@@ -127,6 +136,17 @@ class Collector:
         """Un-save one item on the app. Return 'unsaved' only if the app confirms it is no longer saved,
         'already_unsaved' if it was not saved, else 'failed'."""
         raise NotImplementedError
+
+    # ---- incremental mode (auto-sync): stop paginating once already-stored items show up ----
+    @staticmethod
+    def is_known(cfg: RunConfig, it: CollectedItem) -> bool:
+        if not cfg.known: return False
+        return it.url in cfg.known or bool(it.external_id and f"id:{it.external_id}" in cfg.known)
+
+    def incremental_done(self, cfg: RunConfig, items) -> bool:
+        """True once >= cfg.stop_after_known of `items` are already stored (saved lists are newest-first)."""
+        if not cfg.stop_after_known or not cfg.known: return False
+        return sum(1 for it in items if self.is_known(cfg, it)) >= cfg.stop_after_known
 
     def ensure_logged_in(self, page, session_file) -> None:
         if self.is_login_page(page):

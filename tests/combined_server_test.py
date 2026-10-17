@@ -46,7 +46,7 @@ try:
         httpx.post(BASE + "/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=h2)
         r = httpx.post(BASE + "/mcp", json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, headers=h2)
         names = sorted(t["name"] for t in parse(r)["result"]["tools"]) if r.status_code == 200 else []
-        check(f"MCP tools/list (Host: {host})", len(names) == 15, f"{len(names)} tools")
+        check(f"MCP tools/list (Host: {host})", len(names) == 17, f"{len(names)} tools")
     r = httpx.post(BASE + "/mcp", json=INIT, headers={**auth, "Host": "evil.example.com"}); check("MCP foreign Host rejected (DNS-rebinding protection)", r.status_code == 421, str(r.status_code))
     r = httpx.post(BASE + "/mcp", json=INIT, headers={**auth, "Origin": "https://evil.example.com"}); check("MCP foreign Origin rejected", r.status_code == 403, str(r.status_code))
 
@@ -57,8 +57,27 @@ try:
                 tools = (await s.list_tools()).tools
                 res = json.loads((await s.call_tool("search_items", {"query": "nasi lemak"})).content[0].text)
                 return len(tools), res["total"]
-    n, total = asyncio.run(sdk()); check("MCP SDK client: initialize+list_tools+search_items", n == 15 and total == 1, f"{n} tools, search total={total}")
+    n, total = asyncio.run(sdk()); check("MCP SDK client: initialize+list_tools+search_items", n == 17 and total == 1, f"{n} tools, search total={total}")
     r = httpx.get(BASE + "/healthz"); check("dashboard still healthy after MCP traffic", r.status_code == 200)
+    # security headers + auto-sync endpoints / MCP tools (auth required)
+    h = httpx.get(BASE + "/").headers
+    check("security headers on dashboard", h.get("x-frame-options") == "DENY" and h.get("x-content-type-options") == "nosniff"
+          and "frame-ancestors 'none'" in h.get("content-security-policy", "") and h.get("referrer-policy") == "no-referrer")
+    r = httpx.get(BASE + "/api/autosync"); check("GET /api/autosync from this machine (no dashboard password)", r.status_code == 200 and r.json()["unsave"] == "never", str(r.status_code))
+    r = httpx.put(BASE + "/api/autosync", json={"enabled": False}, headers={"Origin": "https://evil.example.com"}); check("PUT /api/autosync cross-origin -> 403", r.status_code == 403, str(r.status_code))
+    r = httpx.get(BASE + "/api/autosync", headers={"Host": "evil.example.com"}); check("GET /api/autosync with foreign Host -> 403", r.status_code == 403, str(r.status_code))
+    call = {"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "set_autosync", "arguments": {"enabled": True}}}
+    r = httpx.post(BASE + "/mcp", json=call, headers=HDR); check("MCP set_autosync without token -> 401", r.status_code == 401, str(r.status_code))
+    async def sdk_sync():
+        async with streamablehttp_client(BASE + "/mcp", headers={"Authorization": f"Bearer {TOKEN}"}) as (rd, wr, _):
+            async with ClientSession(rd, wr) as s:
+                await s.initialize()
+                a = json.loads((await s.call_tool("set_autosync", {"enabled": False, "interval_minutes": 7})).content[0].text)
+                b = json.loads((await s.call_tool("sync_status", {})).content[0].text)
+                c = json.loads((await s.call_tool("set_autosync", {"enabled": True, "interval_minutes": 1})).content[0].text)
+                return a, b, c
+    a, b, c = asyncio.run(sdk_sync())
+    check("MCP set_autosync + sync_status with token", a["interval_minutes"] == 7 and b["interval_minutes"] == 7 and b["enabled"] is False and "error" in c, json.dumps(b)[:100])
     # dashboard basic auth (second server instance with SAVEHUB_DASHBOARD_PASSWORD)
     st = httpx.get(BASE + "/api/vault/status").json()
     check("vault disabled when no dashboard login (server 1)", not st["enabled"], st["reason"][:70])

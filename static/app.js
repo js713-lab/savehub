@@ -93,13 +93,13 @@ async function loadItems() {
   if (L.view === 'cards') el.innerHTML = `<div class="grid">${r.items.map(i => `
     <div class="card">
       <div class="meta">${pbadge(i.platform)}${i.is_sample ? '<span class="sample">SAMPLE</span>' : ''}<span>${esc(i.author || '')}${i.author_handle ? ' @' + esc(i.author_handle) : ''}</span></div>
-      <h3><a href="${esc(i.url || '#')}" target="_blank" rel="noopener">${esc(i.title)}</a></h3>
+      <h3><a href="${esc(safeUrl(i.url) || '#')}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a></h3>
       <div class="sum">${esc(i.summary || '')}</div>
       <div class="tags">${tagsHtml(i)}</div>
       <div class="foot"><span>Saved ${fdate(i.saved_at)}${i.account_name ? ' · via ' + esc(i.account_name) : ''}</span><span><a href="#" onclick="itemModal(${i.id});return false">details</a></span></div>
     </div>`).join('')}</div>`;
   else el.innerHTML = `<table><thead><tr>${[['title','Title'],['platform','Platform'],['author','Author'],['', 'Tags'],['', 'Account'],['saved_at','Saved']].map(([k,l]) => `<th ${k?`onclick="L.sort='${k}';L.order=L.order==='desc'?'asc':'desc';viewLibrary(new URLSearchParams())"`:''}>${l}${L.sort===k?(L.order==='desc'?' ↓':' ↑'):''}</th>`).join('')}</tr></thead><tbody>
-    ${r.items.map(i => `<tr><td><a href="${esc(i.url||'#')}" target="_blank">${esc(i.title)}</a> ${i.is_sample?'<span class="sample">SAMPLE</span>':''}<div class="muted small">${esc(i.summary||'')}</div></td><td>${pbadge(i.platform)}</td><td>${esc(i.author||'')}</td><td>${tagsHtml(i)}</td><td class="small">${esc(i.account_name||'')}</td><td class="small">${fdate(i.saved_at)}</td></tr>`).join('')}</tbody></table>`;
+    ${r.items.map(i => `<tr><td><a href="${esc(safeUrl(i.url)||'#')}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a> ${i.is_sample?'<span class="sample">SAMPLE</span>':''}<div class="muted small">${esc(i.summary||'')}</div></td><td>${pbadge(i.platform)}</td><td>${esc(i.author||'')}</td><td>${tagsHtml(i)}</td><td class="small">${esc(i.account_name||'')}</td><td class="small">${fdate(i.saved_at)}</td></tr>`).join('')}</tbody></table>`;
 }
 async function retagAll() { toast('Tagging…'); const r = await jpost('/api/tag', {force: true}); toast(`Re-tagged ${r.retagged} items with ${r.provider.active}`); viewLibrary(new URLSearchParams()); }
 async function itemModal(id) {
@@ -108,7 +108,7 @@ async function itemModal(id) {
     <h3>${esc(i.title)}</h3><p>${esc(i.content || '')}</p><p class="muted">${esc(i.summary || '')}</p>
     <div class="form"><label class="full">Tags (comma separated)<input id="etags" value="${esc((i.tags||[]).join(', '))}"></label>
     <label class="full">Account<select id="eacct">${accountOptions(i.account_id, null).replace('All accounts','— none —')}</select></label></div>
-    <p class="small"><a href="${esc(i.url||'#')}" target="_blank">${esc(i.url||'')}</a><br>Saved ${esc(i.saved_at)}</p>
+    <p class="small"><a href="${esc(safeUrl(i.url)||'#')}" target="_blank" rel="noopener noreferrer">${esc(i.url||'')}</a><br>Saved ${esc(i.saved_at)}</p>
     <div class="row"><button class="btn" onclick="saveItem(${i.id})">Save</button><button class="btn ghost" onclick="closeModal()">Close</button><span style="flex:1"></span><button class="btn danger" onclick="delItem(${i.id})">Delete</button></div>`);
 }
 async function saveItem(id) { await jpost('/api/items/' + id, {tags: $('#etags').value.split(',').map(s => s.trim()).filter(Boolean), account_id: $('#eacct').value || null}, 'PATCH'); closeModal(); loadItems(); }
@@ -145,7 +145,7 @@ async function viewSummary(params) {
     <div class="panel"><h4>Top tags</h4><div class="chips">${s.top_tags.map(([t, n]) => `<span class="tag">#${esc(t)} ${n}</span>`).join(' ')}</div>
       <h4 style="margin-top:14px">Top authors</h4>${s.top_authors.map(([a, n]) => `<div class="small">${esc(a)} <span class="muted">· ${n}</span></div>`).join('')}</div>
   </div>
-  <div class="panel" style="margin-top:14px"><h4>Recent saves</h4>${s.recent.map(i => `<div class="row" style="margin:6px 0">${pbadge(i.platform)}<a href="${esc(i.url||'#')}" target="_blank">${esc(i.title)}</a><span class="muted small">${fdate(i.saved_at)}</span></div>`).join('')}</div>`;
+  <div class="panel" style="margin-top:14px"><h4>Recent saves</h4>${s.recent.map(i => `<div class="row" style="margin:6px 0">${pbadge(i.platform)}<a href="${esc(safeUrl(i.url)||'#')}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a><span class="muted small">${fdate(i.saved_at)}</span></div>`).join('')}</div>`;
 }
 
 // ---------------- Accounts ----------------
@@ -172,6 +172,7 @@ const pmark = (id, size = '') => LOGOS.has(id)
 const PURL = {x: h => `https://x.com/${h}`, threads: h => `https://www.threads.net/@${h}`, instagram: h => `https://www.instagram.com/${h}/`,
   facebook: h => `https://www.facebook.com/${h}`, messenger: h => `https://m.me/${h}`, tiktok: h => `https://www.tiktok.com/@${h}`,
   whatsapp: h => { const d = h.replace(/\D/g, ''); return d.length >= 7 ? `https://wa.me/${d}` : ''; }};
+const safeUrl = u => /^https?:\/\//i.test(String(u || '').trim()) ? String(u).trim() : '';   // no javascript:/data: links
 const cleanHandle = h => String(h || '').trim().replace(/^@+/, '').trim();
 const autoUrl = (p, h) => { h = cleanHandle(h); if (!h || (/\s/.test(h) && p !== 'whatsapp')) return ''; return PURL[p] ? PURL[p](h) : ''; };
 const showHandle = (p, h) => h ? (pm(p).at ? '@' + h : h) : '';
@@ -201,6 +202,7 @@ const IC = {
   shield: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6Z"/><path d="m9 12 2 2 4-4"/></svg>',
   warn: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3 2 21h20Z"/><path d="M12 10v5M12 18h.01"/></svg>',
   search: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  sync: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/></svg>',
 };
 const statusPill = s => `<span class="spill s-${esc(s || 'active')}">${esc((STATUSES.find(x => x[0] === s) || [0, s || 'active'])[1])}</span>`;
 const acctLabel = a => a.display_name || showHandle(a.platform, a.handle) || 'Untitled';
@@ -245,6 +247,58 @@ async function saveSecretFor(id) {
   return pw ? 'saved' : rm ? 'removed' : '';
 }
 
+// ---- auto-sync UI (browser collector; incremental, never un-saves) ----
+let SYNC = null, SYNC_T = null;
+const ago = sec => sec == null ? '' : sec < 60 ? 'just now' : sec < 3600 ? `${Math.round(sec / 60)} min ago` : sec < 86400 ? `${Math.round(sec / 3600)} h ago` : `${Math.round(sec / 86400)} d ago`;
+const syncFor = a => !SYNC || !SYNC.accounts ? null : (SYNC.accounts.find(s => s.account_id === a.id)
+  || SYNC.accounts.find(s => s.platform === a.platform && s.account.toLowerCase() === '@' + cleanHandle(a.handle).toLowerCase()));
+const syncText = s => ({syncing: 'Syncing…', needs_login: 'Needs login', locked: 'Locked: vault key missing', busy: 'Busy, retrying shortly',
+  disabled: 'Collector not available', pending: 'Waiting for first sync',
+  error: `Error${s.consecutive_errors > 1 ? ` (${s.consecutive_errors}×)` : ''}${s.next_run ? ' · retry ' + new Date(s.next_run).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : ''}`,
+  synced: `Synced ${ago(s.last_success_ago_s)}${s.items_added_last_run ? ` · +${s.items_added_last_run} new` : ''}`})[s.state] || s.state;
+const syncTitle = s => s.state === 'needs_login' ? `Session expired. On the box run: ${s.fix || ''}` : s.last_error ? s.last_error : s.next_run ? `Next sync ${new Date(s.next_run).toLocaleString()}` : '';
+const syncRow = s => !s ? '' : `<div class="syncrow st-${esc(s.state)}" title="${esc(syncTitle(s))}">${IC.sync}<span class="stxt">${esc(syncText(s))}</span><span class="grow"></span>${SYNC.available ? `<button type="button" class="btn ghost xs" data-act="syncnow" data-p="${esc(s.platform)}" data-a="${esc(s.account)}" ${s.state === 'syncing' ? 'disabled' : ''} aria-label="Sync ${esc(s.platform)} ${esc(s.account)} now">Sync now</button>` : ''}</div>`;
+const INTERVALS = [2, 5, 10, 15, 30, 60, 120];
+function syncStrip() {
+  if (!SYNC) return '';
+  if (SYNC.error) return `<div class="vstrip off">${IC.sync}<span><b>Auto-sync status unavailable.</b> ${esc(SYNC.error)}</span></div>`;
+  if (!SYNC.available) return `<div class="vstrip off">${IC.sync}<span><b>Auto-sync unavailable on this server.</b> ${esc(SYNC.reason || '')}</span></div>`;
+  const n = SYNC.accounts.length, nl = SYNC.accounts.filter(a => a.state === 'needs_login').length, er = SYNC.accounts.filter(a => a.state === 'error').length;
+  const loop = !SYNC.enabled ? 'paused' : SYNC.loop.running ? 'running' : 'no sync loop running on the box';
+  const ivs = INTERVALS.includes(SYNC.interval_minutes) ? INTERVALS : [...INTERVALS, SYNC.interval_minutes].sort((x, y) => x - y);
+  const orphans = SYNC.accounts.filter(s => !s.account_id);
+  return `<div class="vstrip sync ${SYNC.enabled ? 'on' : ''}">${IC.sync}
+    <label class="chk"><input type="checkbox" id="asToggle" ${SYNC.enabled ? 'checked' : ''}> <b>Auto-sync</b></label>
+    <label class="chk">every <select id="asInterval" aria-label="Auto-sync interval">${ivs.map(v => `<option value="${v}" ${v === SYNC.interval_minutes ? 'selected' : ''}>${v} min</option>`).join('')}</select></label>
+    <span class="muted grow" title="${SYNC.loop.running ? `pid ${esc(SYNC.loop.pid)} · ${esc(SYNC.loop.where)}` : 'Start it on the box: python -m savehub.collector autosync'}">${n} signed-in session${n === 1 ? '' : 's'}${nl ? ` · <b class="warntxt">${nl} need login</b>` : ''}${er ? ` · ${er} with errors` : ''} · ${loop} · never un-saves${SYNC.session_encryption === 'on' ? ' · sessions encrypted' : ''}</span>
+    <button type="button" class="btn ghost xs" data-act="syncall" ${n ? '' : 'disabled'}>Sync all now</button></div>
+    ${orphans.length ? `<div class="syncorph">${orphans.map(s => `<div class="syncchip">${pmark(s.platform, 'xs')}<b>${esc(s.account)}</b>${syncRow(s)}</div>`).join('')}</div>` : ''}`;
+}
+async function loadSync() {
+  try { SYNC = await api('/api/autosync'); } catch (e) { SYNC = {error: e.message, accounts: []}; }
+  if (!$('#syncbar')) { clearInterval(SYNC_T); SYNC_T = null; return; }
+  $('#syncbar').innerHTML = syncStrip(); renderAccounts();
+}
+async function syncNowFor(btn, platform, account) {
+  if (btn) btn.disabled = true;
+  try { const r = await jpost('/api/autosync/run', platform ? {platform, account} : {});
+    toast(r.started.length ? `Syncing ${r.started.length} account${r.started.length === 1 ? '' : 's'}…` : (r.busy.length ? 'Already syncing' : 'Nothing to sync'), {kind: 'ok'});
+  } catch (e) { toast(e.message, {kind: 'err'}); }
+  setTimeout(loadSync, 1500);
+}
+function onSyncBarClick(e) {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  if (b.dataset.act === 'syncall') syncNowFor(b);
+  else if (b.dataset.act === 'syncnow') syncNowFor(b, b.dataset.p, b.dataset.a);
+}
+async function onSyncBarChange(e) {
+  const body = e.target.id === 'asToggle' ? {enabled: e.target.checked} : e.target.id === 'asInterval' ? {interval_minutes: +e.target.value} : null;
+  if (!body) return;
+  try { SYNC = await jpost('/api/autosync', body, 'PUT'); toast(body.enabled === undefined ? `Auto-sync every ${SYNC.interval_minutes} min` : `Auto-sync ${SYNC.enabled ? 'on' : 'paused'}`, {kind: 'ok'}); }
+  catch (err) { toast(err.message, {kind: 'err'}); }
+  loadSync();
+}
+
 const A = {q: '', platform: '', status: '', sort: 'platform', order: 'asc', view: localStorage.acctView || 'grid', all: [], editing: null};
 async function viewAccounts() {
   $('#view').innerHTML = `
@@ -258,6 +312,7 @@ async function viewAccounts() {
     </div>
   </section>
   <div id="vaultbar">${vaultStrip()}</div>
+  <div id="syncbar" aria-live="polite"></div>
   <div class="segbar" id="psegs" role="toolbar" aria-label="Filter by platform"></div>
   <div class="toolbar acct-tools">
     <div class="searchwrap">${IC.search}<input class="search" id="aq" type="search" aria-label="Search accounts" placeholder="Search name, handle, email, phone, notes, tags…" value="${esc(A.q)}"><kbd>/</kbd></div>
@@ -277,6 +332,9 @@ async function viewAccounts() {
   $('#psegs').onclick = e => { const b = e.target.closest('[data-p]'); if (b) { A.platform = b.dataset.p; renderAccounts(); } };
   $('#sseg').onclick = e => { const b = e.target.closest('[data-s]'); if (b) { A.status = b.dataset.s; renderAccounts(); } };
   $('#alist').onclick = onAcctListClick;
+  $('#syncbar').onclick = onSyncBarClick; $('#syncbar').onchange = onSyncBarChange;
+  clearInterval(SYNC_T); SYNC_T = setInterval(() => { if (document.visibilityState === 'visible') loadSync(); }, 20000);
+  loadSync();
   await loadAccounts();
 }
 async function loadAccounts() {
@@ -321,10 +379,11 @@ function acctCard(a) {
   const h = showHandle(a.platform, a.handle);
   return `<article class="acard" data-id="${a.id}" tabindex="-1">
     <div class="acard-top">${avatar(a)}<div class="who"><div class="nm" title="${esc(acctLabel(a))}">${esc(a.display_name || h || 'Untitled')}${a.is_sample ? ' <span class="sample">SAMPLE</span>' : ''}</div>
-      <div class="hd">${h ? (a.profile_url ? `<a href="${esc(a.profile_url)}" target="_blank" rel="noopener">${esc(h)} ${IC.link}</a>` : esc(h)) : '<span class="muted">no handle</span>'}</div></div>${statusPill(a.status)}</div>
+      <div class="hd">${h ? (safeUrl(a.profile_url) ? `<a href="${esc(safeUrl(a.profile_url))}" target="_blank" rel="noopener noreferrer">${esc(h)} ${IC.link}</a>` : esc(h)) : '<span class="muted">no handle</span>'}</div></div>${statusPill(a.status)}</div>
     ${a.linked_email || a.linked_phone ? `<div class="acard-meta">${a.linked_email ? `<span>${IC.mail}${esc(a.linked_email)}</span>` : ''}${a.linked_phone ? `<span>${IC.phone}${esc(a.linked_phone)}</span>` : ''}</div>` : ''}
     ${(a.tags || []).length ? `<div class="tags">${a.tags.map(t => `<span class="tag" data-act="tag" data-t="${esc(t)}">#${esc(t)}</span>`).join('')}</div>` : ''}
     ${pwRow(a)}
+    ${syncRow(syncFor(a))}
     ${a.notes ? `<div class="notes">${esc(a.notes)}</div>` : ''}
     <div class="acard-foot"><a href="#" class="muted small" data-act="items" data-id="${a.id}">${a.item_count} item${a.item_count === 1 ? '' : 's'} · ${a.contact_count} contact${a.contact_count === 1 ? '' : 's'}</a>
       <span class="acts"><button class="icon" data-act="qedit" data-id="${a.id}" aria-label="Quick edit ${esc(acctLabel(a))}" title="Quick edit">${IC.edit}</button><button class="icon danger" data-act="del" data-id="${a.id}" aria-label="Delete ${esc(acctLabel(a))}" title="Delete">${IC.trash}</button></span></div>
@@ -345,7 +404,7 @@ function acctTable(list) {
   const cols = [['platform', 'App'], ['display_name', 'Account'], ['', 'Linked email / phone'], ['', 'Tags'], ['status', 'Status'], ['', 'Linked'], ['created_at', 'Added'], ['', '']];
   return `<div class="tablewrap"><table class="atable"><thead><tr>${cols.map(([k, l]) => `<th ${k ? `tabindex="0" data-sort="${k}" aria-sort="${A.sort === k ? (A.order === 'desc' ? 'descending' : 'ascending') : 'none'}"` : ''}>${l}${A.sort === k ? (A.order === 'desc' ? ' ↓' : ' ↑') : ''}</th>`).join('')}</tr></thead><tbody>
   ${list.map(a => A.editing === a.id ? `<tr class="editing"><td colspan="8">${acctQuickEdit(a)}</td></tr>` : `<tr data-id="${a.id}"><td><span class="tplat">${pmark(a.platform, 'xs')}${esc(pname(a.platform))}</span></td>
-    <td><div class="tacct">${avatar(a)}<div><b>${esc(a.display_name || showHandle(a.platform, a.handle) || 'Untitled')}</b>${a.is_sample ? ' <span class="sample">SAMPLE</span>' : ''}<div class="muted small">${a.profile_url ? `<a href="${esc(a.profile_url)}" target="_blank" rel="noopener">${esc(showHandle(a.platform, a.handle) || a.profile_url)}</a>` : esc(showHandle(a.platform, a.handle))}</div>${pwRow(a)}</div></div></td>
+    <td><div class="tacct">${avatar(a)}<div><b>${esc(a.display_name || showHandle(a.platform, a.handle) || 'Untitled')}</b>${a.is_sample ? ' <span class="sample">SAMPLE</span>' : ''}<div class="muted small">${safeUrl(a.profile_url) ? `<a href="${esc(safeUrl(a.profile_url))}" target="_blank" rel="noopener noreferrer">${esc(showHandle(a.platform, a.handle) || a.profile_url)}</a>` : esc(showHandle(a.platform, a.handle))}</div>${pwRow(a)}${syncRow(syncFor(a))}</div></div></td>
     <td class="small">${esc(a.linked_email || '')}${a.linked_email && a.linked_phone ? '<br>' : ''}${esc(a.linked_phone || '')}</td>
     <td>${(a.tags || []).map(t => `<span class="tag" data-act="tag" data-t="${esc(t)}">#${esc(t)}</span>`).join(' ')}</td><td>${statusPill(a.status)}</td>
     <td class="small"><a href="#" data-act="items" data-id="${a.id}">${a.item_count} items</a> · ${a.contact_count} contacts</td><td class="small muted">${fdate(a.created_at)}</td>
@@ -366,6 +425,7 @@ function onAcctListClick(e) {
   else if (act === 'del') deleteAccountFlow(id);
   else if (act === 'reveal') revealPw(b, id);
   else if (act === 'copypw') copyPw(id);
+  else if (act === 'syncnow') syncNowFor(b, b.dataset.p, b.dataset.a);
 }
 const focusCard = id => { const el = document.querySelector(`[data-id="${id}"] [data-act="qedit"]`); if (el) el.focus(); };
 document.addEventListener('keydown', e => {

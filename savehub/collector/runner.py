@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from .base import CollectorError, NeedLogin, NotImplementedPlatform, RunConfig, get_collector
 from .logutil import ev
-from . import sessions
+from . import sessions, runtime
 
 SYSTEM_CHROMES = ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]
 LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
@@ -37,6 +37,7 @@ def launch_browser(pw, headful=False):
 
 
 def new_context(browser, storage_state=None):
+    """storage_state: a dict (decrypted in memory by sessions.read_state) or None. Never a plaintext temp file."""
     tmp = browser.new_page(); ua = tmp.evaluate("navigator.userAgent"); tmp.context.close()
     # drop the "HeadlessChrome" token some sites block
     return browser.new_context(storage_state=storage_state, user_agent=ua.replace("HeadlessChrome", "Chrome"),
@@ -56,10 +57,18 @@ def run_collect(platform: str, cfg: RunConfig, sink=None, sessions_dir=None, bro
     if cfg.unsave and not col.supports_unsave:
         raise CollectorError(f"'{platform}' has no un-save action (its collector gathers {col.kind}); drop --unsave")
     if cfg.unsave and sink is None: raise CollectorError("--unsave needs a sink (it only un-saves items confirmed stored in SaveHub)")
+    if cfg.unsave and cfg.stop_after_known: raise CollectorError("incremental mode never un-saves (drop --unsave or --incremental)")
+    with runtime.account_lock(platform, akey, sessions_dir):           # one run per account, across processes
+        return _run_collect_locked(col, platform, cfg, sink, sfile, acct, browser, context_hook)
+
+
+def _run_collect_locked(col, platform, cfg, sink, sfile, acct, browser, context_hook) -> dict:
+    state = sessions.read_state(sfile)                              # decrypts in memory; migrates plaintext -> encrypted
     started = time.time(); collected_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     summary = {"platform": platform, "account": ("@" + acct) if acct else sessions.DEFAULT_ACCOUNT, "account_id": None,
                "status": "ok", "session_file": str(sfile), "unsave_mode": cfg.unsave_mode,
-               "collected": 0, "created": 0, "duplicates": 0, "push_failed": 0, "unsave": {}, "items": []}
+               "collected": 0, "created": 0, "duplicates": 0, "push_failed": 0, "unsave": {}, "items": [],
+               **({"incremental": True, "known_skipped": 0} if cfg.stop_after_known else {})}
     ev("run.start", platform=platform, account=summary["account"], max_items=cfg.max_items, unsave=cfg.unsave_mode, sink=getattr(sink, "kind", "none"))
     if sink is not None:
         h = sink.check(); ev("savehub.ok", items=(h.get("stats") or {}).get("items"))
@@ -74,13 +83,16 @@ def run_collect(platform: str, cfg: RunConfig, sink=None, sessions_dir=None, bro
         if browser is None:
             pw = stack.enter_context(_require_playwright()())
             browser = launch_browser(pw, cfg.headful); stack.callback(browser.close)
-        ctx = new_context(browser, str(sfile)); stack.callback(ctx.close)
+        ctx = new_context(browser, state); stack.callback(ctx.close)
         if context_hook: context_hook(ctx)
         page = ctx.new_page(); page.set_default_timeout(cfg.page_timeout_ms)
         items = col.collect(page, cfg, sfile)
         for it in items: it.source_account = acct           # attribution: source=collector:<platform>:<account>
         summary["collected"] = len(items)
         ev("collect.done", count=len(items))
+        if cfg.stop_after_known:                                       # incremental: only push what is not stored yet
+            new = [it for it in items if not col.is_known(cfg, it)]
+            summary["known_skipped"] = len(items) - len(new); items = new
         results = []
         if sink is not None:
             for it in items:
@@ -132,7 +144,9 @@ def run_login(platform: str, sessions_dir=None, timeout_s: int = 600, wait_enter
         if browser is None:
             pw = stack.enter_context(_require_playwright()())
             browser = launch_browser(pw, headful=True); stack.callback(browser.close)
-        ctx = new_context(browser, str(sfile) if sfile.exists() else None); stack.callback(ctx.close)
+        try: prev = sessions.read_state(sfile) if sfile.exists() else None
+        except sessions.SessionLocked: prev = None                  # unreadable old session: start a fresh login
+        ctx = new_context(browser, prev); stack.callback(ctx.close)
         if context_hook: context_hook(ctx)
         page = ctx.new_page()
         page.goto(col.login_url or col.home_url, wait_until="domcontentloaded")

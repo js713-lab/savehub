@@ -162,6 +162,7 @@ class XCollector(Collector):
                 seen.add(i.external_id); items.append(i)
             ev("x.scroll", round=n, new=len(new), total=len(items))
             if len(items) >= cfg.max_items: ev("x.cap_reached", max_items=cfg.max_items); break
+            if self.incremental_done(cfg, items): ev("x.incremental_stop", known_seen=cfg.stop_after_known, total=len(items)); break
             if new: idle = 0
             else:
                 if page.locator(SEL["retry"]).count() and retries < 2:   # "Something went wrong. Try reloading."
