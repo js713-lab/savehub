@@ -280,6 +280,21 @@ async def autosync_run(req: Request):
     except a.RateLimited as e: raise HTTPException(429, str(e), headers={"Retry-After": str(e.retry_after)})
     return JSONResponse(r, status_code=202)
 
+@app.put("/api/collector/backends")
+async def collector_backend(req: Request):
+    """Per-platform collector backend: {"platform": "x", "backend": "auto" | "playwright" | "<library>"}.
+    Same guard as auto-sync (login or loopback-only, JSON, same-origin). Libraries never un-save."""
+    _admin_guard(req)
+    d = await req.json()
+    if not isinstance(d, dict) or set(d) != {"platform", "backend"} or not all(isinstance(d[k], str) for k in d):
+        raise HTTPException(400, "send exactly {'platform': ..., 'backend': ...}")
+    a = _autosync()
+    from .collector import backends
+    if d["platform"] not in a.REGISTRY or not a.REGISTRY[d["platform"]].implemented: raise HTTPException(400, "unknown platform")
+    try: backends.set_choice(d["platform"], d["backend"])
+    except ValueError as e: raise HTTPException(400, str(e))
+    return a.status()
+
 # ---- settings ----
 def _redact(s):
     s = dict(s); s.pop("x_tokens", None)

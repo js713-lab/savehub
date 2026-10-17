@@ -179,3 +179,4 @@ code{font:12px ui-monospace,monospace;background:var(--panel2);padding:0 4px;bor
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.syncrow.st-syncing svg{animation:none}}
 .syncrow .btn{white-space:nowrap;flex:none}
+.bkpick{display:inline-flex;align-items:center;gap:6px;font-size:12px}.bkpick select{padding:3px 6px;font-size:12px}

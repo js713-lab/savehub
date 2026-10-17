@@ -52,6 +52,8 @@ def build_parser():
     c.add_argument("--incremental", action="store_true", help="stop paginating once already-stored items show up and push only "
                                                               "new ones (used by auto-sync; cannot be combined with --unsave)")
     c.add_argument("--stop-after-known", type=int, default=3, help="incremental: stop after this many already-stored items (default 3)")
+    c.add_argument("--backend", help="auto | playwright | <library> (e.g. twscrape for x, instaloader for instagram); "
+                                     "default = the per-platform setting (dashboard Accounts page). Un-save always uses playwright")
 
     au = sub.add_parser("autosync", help="keep every logged-in account in sync: incremental collect every N minutes (never un-saves)")
     au.add_argument("--interval", type=int, help="minutes between runs per account (default 10, min 2); saved as the new setting")
@@ -67,7 +69,7 @@ def make_config(a) -> RunConfig:
     d = {}
     if a.config:
         with open(a.config) as f: d = json.load(f)
-    for k in ("max_items", "scroll_delay", "headful", "unsave", "unsave_confirm", "max_unsave", "account_id"):
+    for k in ("max_items", "scroll_delay", "headful", "unsave", "unsave_confirm", "max_unsave", "account_id", "backend"):
         v = getattr(a, k, None)
         if v is not None: d[k] = v
     if a.account: d["account_handle"] = a.account
@@ -86,7 +88,9 @@ def main(argv=None) -> int:
         vault.set_runtime_key(sys.stdin.readline())
     out, code = {}, EXIT_OK
     try:
-        if a.cmd == "platforms": out = {"platforms": list_platforms()}
+        if a.cmd == "platforms":
+            from . import backends
+            out = {"platforms": [{**p, "backends": backends.describe(p["platform"])} for p in list_platforms()]}
         elif a.cmd == "sessions": out = {"sessions_dir": str(sessions.sessions_dir(a.sessions_dir)), "sessions": sessions.list_sessions(a.sessions_dir, a.platform)}
         elif a.cmd == "login":
             from .runner import run_login

@@ -274,6 +274,25 @@ function syncStrip() {
     <button type="button" class="btn ghost xs" data-act="syncall" ${n ? '' : 'disabled'}>Sync all now</button></div>
     ${orphans.length ? `<div class="syncorph">${orphans.map(s => `<div class="syncchip">${pmark(s.platform, 'xs')}<b>${esc(s.account)}</b>${syncRow(s)}</div>`).join('')}</div>` : ''}`;
 }
+// per-platform collector backend (auto = open-source library first, browser on error; libraries never un-save)
+const BK_LABEL = {auto: 'Auto', playwright: 'Browser'};
+function backendPick(p) {
+  const b = SYNC && SYNC.backends && SYNC.backends[p];
+  if (!b || !b.options || b.options.length < 2) return '';
+  const libs = Object.fromEntries((b.libraries || []).map(l => [l.name, l]));
+  const tip = `Collector backend. Auto: ${(b.libraries || []).map(l => l.name).join(', ')} first, browser if it fails. Browser: Playwright scraper (the only one that can un-save).` +
+    (b.libraries || []).map(l => `\n${l.name} ${l.version || '(not installed)'} · ${l.license} · ${l.note}`).join('');
+  return `<label class="bkpick" title="${esc(tip)}"><span class="muted">Collector</span><select data-act="backend" data-p="${esc(p)}" aria-label="${esc(pname(p))} collector backend">${b.options.map(o =>
+    `<option value="${esc(o)}" ${o === b.backend ? 'selected' : ''} ${libs[o] && !libs[o].installed ? 'disabled' : ''}>${esc(BK_LABEL[o] || o)}${o === b.default ? ' (default)' : ''}</option>`).join('')}</select></label>`;
+}
+async function onBackendChange(e) {
+  const sel = e.target.closest('select[data-act="backend"]'); if (!sel) return;
+  sel.disabled = true;
+  try { SYNC = await jpost('/api/collector/backends', {platform: sel.dataset.p, backend: sel.value}, 'PUT');
+    toast(`${pname(sel.dataset.p)}: collector ${BK_LABEL[sel.value] || sel.value}`, {kind: 'ok'}); }
+  catch (err) { toast(err.message, {kind: 'err'}); }
+  renderAccounts();
+}
 async function loadSync() {
   try { SYNC = await api('/api/autosync'); } catch (e) { SYNC = {error: e.message, accounts: []}; }
   if (!$('#syncbar')) { clearInterval(SYNC_T); SYNC_T = null; return; }
@@ -332,6 +351,7 @@ async function viewAccounts() {
   $('#psegs').onclick = e => { const b = e.target.closest('[data-p]'); if (b) { A.platform = b.dataset.p; renderAccounts(); } };
   $('#sseg').onclick = e => { const b = e.target.closest('[data-s]'); if (b) { A.status = b.dataset.s; renderAccounts(); } };
   $('#alist').onclick = onAcctListClick;
+  $('#alist').onchange = onBackendChange;
   $('#syncbar').onclick = onSyncBarClick; $('#syncbar').onchange = onSyncBarChange;
   clearInterval(SYNC_T); SYNC_T = setInterval(() => { if (document.visibilityState === 'visible') loadSync(); }, 20000);
   loadSync();
@@ -370,7 +390,7 @@ function renderAccounts() {
   const groups = PLATFORMS.map(p => [p.id, list.filter(a => a.platform === p.id)]).filter(([, l]) => l.length);
   list.filter(a => !PLATFORMS.find(p => p.id === a.platform)).forEach(a => { let g = groups.find(x => x[0] === a.platform); if (!g) groups.push(g = [a.platform, []]); g[1].push(a); });
   el.innerHTML = groups.map(([p, l]) => `<section class="agroup" aria-label="${esc(pname(p))} accounts">
-    <header class="agroup-h">${pmark(p, 'sm')}<h3>${esc(pname(p))}</h3><span class="count">${l.length}</span><span class="grow"></span><button class="btn ghost small" data-act="addp" data-p="${p}" aria-label="Add ${esc(pname(p))} account">${IC.plus} Add</button></header>
+    <header class="agroup-h">${pmark(p, 'sm')}<h3>${esc(pname(p))}</h3><span class="count">${l.length}</span><span class="grow"></span>${backendPick(p)}<button class="btn ghost small" data-act="addp" data-p="${p}" aria-label="Add ${esc(pname(p))} account">${IC.plus} Add</button></header>
     <div class="agrid">${l.map(acctCard).join('')}</div></section>`).join('');
 }
 function clearAcctFilters() { A.q = ''; A.platform = ''; A.status = ''; const q = $('#aq'); if (q) q.value = ''; loadAccounts(); }

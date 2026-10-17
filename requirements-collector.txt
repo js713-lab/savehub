@@ -2,3 +2,7 @@
 #   pip install -r requirements-collector.txt && playwright install chromium
 -r requirements.txt
 playwright>=1.45
+# Optional library backends (per-platform setting auto | playwright | <library>; see README "Library backends").
+# Pinned; checked with pip-audit. Remove a line to drop that backend (auto then simply uses the browser).
+twscrape==0.20.1        # X bookmarks via X's web GraphQL with your session cookies (MIT)
+instaloader==4.15.4     # Instagram saved posts with your session cookies (MIT)

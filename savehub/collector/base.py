@@ -89,6 +89,7 @@ class RunConfig:
                                         # tags items source=collector:<platform>:<handle> and links them to that account row
     known: set = field(default_factory=set, repr=False)   # incremental mode: urls + "id:<external_id>" already stored
     stop_after_known: int = 0           # incremental mode: stop paginating once this many already-stored items were seen (0 = off)
+    backend: str = ""                   # auto | playwright | <library> (savehub.collector.backends); "" = the saved per-platform setting
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "RunConfig":

@@ -436,7 +436,13 @@ def status(sessions_dir=None) -> dict:
                       **({"fix": f"python -m savehub.collector login {p}" + (f" --account @{a}" if a != sessions.DEFAULT_ACCOUNT else "")}
                          if lbl == "needs_login" else {})})
     rt = runtime.collector_runtime()
-    return {"enabled": cfg["enabled"], "interval_minutes": iv, "min_interval_minutes": MIN_INTERVAL,
+    from . import backends
+    bk = {}
+    for p in sorted(REGISTRY):
+        if not REGISTRY[p].implemented: continue
+        try: bk[p] = backends.describe(p)
+        except Exception as e: bk[p] = {"backend": "playwright", "options": ["playwright"], "error": scrub(str(e))[:200]}
+    return {"enabled": cfg["enabled"], "interval_minutes": iv, "min_interval_minutes": MIN_INTERVAL, "backends": bk,
             "available": bool(rt["available"]), **({"reason": rt.get("reason")} if not rt["available"] else {}),
             "loop": loop_info(now), "unsave": "never", "max_items_per_run": DEFAULT_MAX_ITEMS,
             "session_encryption": _enc_state(), "accounts": accts}

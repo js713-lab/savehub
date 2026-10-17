@@ -121,6 +121,7 @@ Tools: `search_items, list_items, get_item, add_item, tag_items, get_summary, li
 .venv/bin/python tests/combined_server_test.py       # boots combined server on PORT=8900 with a fresh DB: /healthz, dashboard, REST, MCP auth/hosts/tools
 .venv/bin/python tests/screenshots.py                # headless screenshots → screenshots/
 .venv/bin/python -m pytest -q tests/collector_test.py   # browser collector: X parser on HTML fixtures, scroll/de-dupe, login detection, push to a temp SaveHub, unsave safety
+.venv/bin/python -m pytest -q tests/backends_test.py          # library backends (twscrape, instaloader): mocked libraries, cookie conversion, fallback, no files left
 .venv/bin/python -m pytest -q tests/autosync_security_test.py   # auto-sync (incremental stop, backoff, needs-login, toggle, locks) + security (session perms/encryption, auth, CSRF, headers, log scrubbing)
 ```
 
@@ -226,6 +227,33 @@ Exit codes: `0` ok · `1` error · **`2` need login** (no session or it expired;
 - `list_platforms()` adds `collector` (supported, implemented, per-account sessions, logged_in_accounts) per platform and a
   top-level `collector_runtime` (is a browser available here).
 No MCP tool takes or returns passwords, cookies or session contents.
+
+### Library backends (optional, per platform: `auto` | `playwright` | `<library>`)
+Where a maintained open-source client is clearly more robust than DOM scraping, it can collect instead of the browser,
+**reusing the cookies of the saved session** (decrypted in memory; no passwords, nothing new to log in to). Pick per platform on
+the dashboard **Accounts** page (*Collector* dropdown in each platform header), or per run with `collect --backend …`.
+`auto` = library first, the Playwright collector on any error (the summary says `backend` and lists `fallback` errors).
+An explicitly chosen library does not fall back. **Libraries never un-save**: `--unsave` always runs on the Playwright path.
+`list_platforms` / `login_status` (MCP), `GET /api/autosync` and `collect platforms` show the setting (`backend`, `options`,
+`effective` order, installed library versions, licenses). Write: `PUT /api/collector/backends {"platform","backend"}` (same guard as auto-sync).
+
+| Platform | Backend | Why | License | Risk |
+|---|---|---|---|---|
+| X | **twscrape 0.20.1** (default `auto`) | X's own web GraphQL Bookmarks timeline with `auth_token`+`ct0`; JSON instead of DOM, maintained (2026 releases, x-client-transaction-id support). Its accounts-pool SQLite file lives in a 0700 temp dir and is deleted after the run; PostHog telemetry off (`TWS_TELEMETRY=0`, `DO_NOT_TRACK=1`); loguru output goes through the scrubber | MIT | same session as your browser; automated API use is against X ToS, keep runs small |
+| Instagram | **instaloader 4.15.4** (opt-in, default `playwright`) | `get_saved_posts()` with the session cookies in memory (no session/resume file). No collection names, and Instagram throttles/changes this GraphQL endpoint at times (rate controller fails fast so `auto` falls back) | MIT | 401/“please wait” throttling, checkpoint on heavy use |
+| Threads, Facebook, TikTok, Douyin, 小红书, Messenger, WhatsApp | Playwright (kept) | no maintained library clearly better for *your saved/favourites* list with web cookies (see below) | – | – |
+| WeChat | stub (kept) | every working route reads the **desktop** app (Windows/macOS); nothing runs on Linux | – | – |
+
+Evaluated and not integrated: **twikit** (no PyPI release since 2025-02, depends on Js2Py), **instagrapi** (private *mobile* API with
+a web session = higher checkpoint/ban risk, native curl_cffi), **f2** (has Douyin 收藏, but pins cryptography 44 / httpx 0.27 /
+pydantic 2.9 / pytest 8 and would downgrade the app's deps), **Douyin_TikTok_Download_API** (a server app, not a library),
+**yt-dlp** and **TikTokApi** (no own Favorites/收藏 list), **MediaCrawler** (NON-COMMERCIAL licence, crawls search/creators, no
+收藏, itself drives Playwright), **xhs/ReaJason** (unmaintained since 2024, signing needs a browser anyway), **Spider_XHS**
+(no licence file, signs with bundled obfuscated JS via Node), Threads wrappers (archived since 2023; the official Threads API
+has no saved posts), **facebook-scraper** (dead since 2022), **whatsapp-web.js / Baileys** (need their own QR-linked device
+session, cannot reuse ours; Baileys = unofficial protocol client, real ban risk), **WeChatFerry** (archived, Windows DLL
+injection), **PyWxDump** / **chatlog** (read the decrypted desktop DB on Windows/macOS only).
+Install: `pip install -r requirements-collector.txt` (pinned). Without the libraries `auto` simply uses the browser.
 
 **Fragility:** this scrapes the web UI. When an app changes its markup, selectors break. They all live in `SEL` in
 `savehub/collector/platforms/<module>.py` (x, meta, bytedance, xiaohongshu, facebook, contacts), and `tests/fixtures/` mirrors the expected DOM/JSON. Automated use may hit

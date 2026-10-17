@@ -37,6 +37,16 @@ Collector runs (MCP `collect`, auto-sync, "Sync now") are separate processes wit
 encrypted sessions, the key is written to its **stdin pipe** (`--key-stdin`), not argv or env. Children run in their own process
 group, are killed on timeout, and use fixed argv (no shell).
 
+## Library backends (twscrape, instaloader)
+* They get the session's storage_state **decrypted in memory** and only the cookies of their own site (`x.com`/`twitter.com`,
+  `instagram.com`); no password is ever involved. instaloader keeps the cookie jar in memory (no session/resume files).
+  twscrape insists on an SQLite accounts file: it is created `0600` inside a `0700` temp dir and removed in `finally`
+  (tests assert nothing is left). Library backends never write the session file back.
+* twscrape telemetry is disabled in-process (`TWS_TELEMETRY=0`, `DO_NOT_TRACK=1`); its logs and every backend error message go
+  through the scrubber. They run inside the same stripped-environment collector child as the browser path.
+* They are read-only: un-save always runs on the Playwright path. Versions are pinned in `requirements-collector.txt` and
+  covered by `pip-audit`.
+
 ## Un-save safety
 * Auto-sync **never** un-saves: its child command has no un-save flags (enforced at runtime) and the CLI refuses
   `--incremental` together with `--unsave`. The REST "Sync now" endpoint rejects any extra field (e.g. `unsave`).

@@ -113,7 +113,13 @@ def _collector_info(platform: str) -> dict:
     if cls is None: return {"supported": False, "implemented": False, "accounts": [], "logged_in_accounts": 0}
     accts = _session_list(platform)
     return {"supported": True, "implemented": bool(cls.implemented), "accounts": accts,
-            "logged_in_accounts": sum(1 for a in accts if a["logged_in"])}
+            "logged_in_accounts": sum(1 for a in accts if a["logged_in"]), "backend": _backend_info(platform)}
+
+def _backend_info(platform: str) -> dict:
+    """auto | playwright | <library> setting + which libraries are installed (set it on the dashboard Accounts page)."""
+    from .collector import backends
+    try: return backends.describe(platform)
+    except Exception as e: return {"backend": "playwright", "error": str(e)[:200]}
 
 @mcp.tool()
 def list_platforms() -> dict:
@@ -134,7 +140,7 @@ def login_status(platform: str, account: Optional[str] = None) -> dict:
     except ValueError as e: return {"error": str(e)}
     ok = [a for a in accts if a["logged_in"]]
     r = {"platform": platform, "collector_implemented": bool(base.REGISTRY[platform].implemented), "logged_in": bool(ok),
-         "accounts": accts, "collector_runtime": collector_runtime()}
+         "accounts": accts, "collector_runtime": collector_runtime(), "backend": _backend_info(platform)}
     if not base.REGISTRY[platform].implemented:
         r["note"] = f"the '{platform}' collector is not implemented yet (only {[k for k, c in base.REGISTRY.items() if c.implemented]})"
     if not ok:

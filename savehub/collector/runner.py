@@ -4,7 +4,7 @@ import contextlib, logging, os, shutil, time
 from datetime import datetime, timezone
 from pathlib import Path
 from .base import CollectorError, NeedLogin, NotImplementedPlatform, RunConfig, get_collector
-from .logutil import ev
+from .logutil import ev, scrub
 from . import sessions, runtime
 
 SYSTEM_CHROMES = ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]
@@ -62,12 +62,47 @@ def run_collect(platform: str, cfg: RunConfig, sink=None, sessions_dir=None, bro
         return _run_collect_locked(col, platform, cfg, sink, sfile, acct, browser, context_hook)
 
 
+def choose_plan(platform: str, cfg: RunConfig) -> tuple:
+    """-> (choice, [backend names to try]). Un-save runs always use the Playwright collector (libraries never un-save)."""
+    from . import backends
+    choice = backends.validate(platform, cfg.backend) if cfg.backend else backends.get_choice(platform)
+    if cfg.unsave:
+        if choice not in (backends.AUTO, backends.PLAYWRIGHT): ev("backend.unsave_uses_playwright", requested=choice)
+        return choice, [backends.PLAYWRIGHT]
+    return choice, backends.plan(platform, choice)
+
+
+def _library_collect(platform, choice, names, state, cfg, acct, summary):
+    """Try the library backends in order. Returns items, or None = continue with Playwright (auto fallback)."""
+    from . import backends
+    for name in names:
+        if name == backends.PLAYWRIGHT: return None
+        try:
+            mod = backends.load(platform, name)
+            ev("backend.start", platform=platform, backend=name)
+            items = mod.collect(state, cfg, acct)
+            summary["backend"] = name
+            return items
+        except Exception as e:
+            err = backends.fail(name, e)
+            if choice != backends.AUTO:                         # explicitly chosen library: its error is the result
+                raise CollectorError(str(err)) from None
+            backends.log_fallback(platform, name, err)
+            summary.setdefault("fallback", []).append({"backend": name, "error": scrub(str(err))[:300]})
+    return None
+
+
 def _run_collect_locked(col, platform, cfg, sink, sfile, acct, browser, context_hook) -> dict:
     state = sessions.read_state(sfile)                              # decrypts in memory; migrates plaintext -> encrypted
+    try: choice, names = choose_plan(platform, cfg)
+    except ValueError as e: raise CollectorError(str(e)) from None
+    if not cfg.backend and (browser is not None or context_hook is not None):
+        names = ["playwright"]                  # an injected browser / network hook (tests, fixtures) means: use the browser
     started = time.time(); collected_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     summary = {"platform": platform, "account": ("@" + acct) if acct else sessions.DEFAULT_ACCOUNT, "account_id": None,
                "status": "ok", "session_file": str(sfile), "unsave_mode": cfg.unsave_mode,
                "collected": 0, "created": 0, "duplicates": 0, "push_failed": 0, "unsave": {}, "items": [],
+               "backend": "playwright", "backend_setting": choice,
                **({"incremental": True, "known_skipped": 0} if cfg.stop_after_known else {})}
     ev("run.start", platform=platform, account=summary["account"], max_items=cfg.max_items, unsave=cfg.unsave_mode, sink=getattr(sink, "kind", "none"))
     if sink is not None:
@@ -79,37 +114,47 @@ def _run_collect_locked(col, platform, cfg, sink, sfile, acct, browser, context_
             if cfg.account_id is None: ev("account.not_found", logging.WARNING, handle=acct, note="items stored without account link (still tagged in source)")
             else: ev("account.linked", handle=acct, account_id=cfg.account_id)
     summary["account_id"] = cfg.account_id
-    with contextlib.ExitStack() as stack:
-        if browser is None:
-            pw = stack.enter_context(_require_playwright()())
-            browser = launch_browser(pw, cfg.headful); stack.callback(browser.close)
-        ctx = new_context(browser, state); stack.callback(ctx.close)
-        if context_hook: context_hook(ctx)
-        page = ctx.new_page(); page.set_default_timeout(cfg.page_timeout_ms)
-        items = col.collect(page, cfg, sfile)
-        for it in items: it.source_account = acct           # attribution: source=collector:<platform>:<account>
-        summary["collected"] = len(items)
-        ev("collect.done", count=len(items))
-        if cfg.stop_after_known:                                       # incremental: only push what is not stored yet
-            new = [it for it in items if not col.is_known(cfg, it)]
-            summary["known_skipped"] = len(items) - len(new); items = new
-        results = []
-        if sink is not None:
-            for it in items:
-                r = sink.push(it, cfg.account_id, collected_at); results.append(r)
-                if r.error: summary["push_failed"] += 1; ev("push.failed", logging.WARNING, url=it.url, error=r.error)
-                elif r.created: summary["created"] += 1
-                else: summary["duplicates"] += 1
-        summary["items"] = [{"url": it.url, "author_handle": it.author_handle, "posted_at": it.posted_at,
-                             "has_media": it.has_media, "text": it.text[:140],
-                             **({"savehub_id": r.id, "created": r.created, "confirmed": r.confirmed} if r else {})}
-                            for it, r in zip(items, results or [None] * len(items))]
-        if cfg.unsave:
-            summary["unsave"] = _unsave(col, page, [r for r in results if r.confirmed and not r.error], cfg, sfile)
-        sessions.save_state(ctx, sfile, col.needs_indexed_db)                       # keep refreshed cookies for next run
+    items = _library_collect(platform, choice, names, state, cfg, acct, summary)
+    if items is not None:                                               # library backend: no browser, never un-saves
+        _push(col, items, cfg, sink, acct, collected_at, summary)
+    else:
+        with contextlib.ExitStack() as stack:
+            if browser is None:
+                pw = stack.enter_context(_require_playwright()())
+                browser = launch_browser(pw, cfg.headful); stack.callback(browser.close)
+            ctx = new_context(browser, state); stack.callback(ctx.close)
+            if context_hook: context_hook(ctx)
+            page = ctx.new_page(); page.set_default_timeout(cfg.page_timeout_ms)
+            items = col.collect(page, cfg, sfile)
+            results = _push(col, items, cfg, sink, acct, collected_at, summary)
+            if cfg.unsave:
+                summary["unsave"] = _unsave(col, page, [r for r in results if r.confirmed and not r.error], cfg, sfile)
+            sessions.save_state(ctx, sfile, col.needs_indexed_db)                   # keep refreshed cookies for next run
+    state = None
     summary["elapsed_s"] = round(time.time() - started, 1)
     ev("run.done", **{k: v for k, v in summary.items() if k not in ("items",)})
     return summary
+
+
+def _push(col, items, cfg, sink, acct, collected_at, summary) -> list:
+    for it in items: it.source_account = acct               # attribution: source=collector:<platform>:<account>
+    summary["collected"] = len(items)
+    ev("collect.done", count=len(items), backend=summary.get("backend"))
+    if cfg.stop_after_known:                                       # incremental: only push what is not stored yet
+        new = [it for it in items if not col.is_known(cfg, it)]
+        summary["known_skipped"] = len(items) - len(new); items = new
+    results = []
+    if sink is not None:
+        for it in items:
+            r = sink.push(it, cfg.account_id, collected_at); results.append(r)
+            if r.error: summary["push_failed"] += 1; ev("push.failed", logging.WARNING, url=it.url, error=r.error)
+            elif r.created: summary["created"] += 1
+            else: summary["duplicates"] += 1
+    summary["items"] = [{"url": it.url, "author_handle": it.author_handle, "posted_at": it.posted_at,
+                         "has_media": it.has_media, "text": it.text[:140],
+                         **({"savehub_id": r.id, "created": r.created, "confirmed": r.confirmed} if r else {})}
+                        for it, r in zip(items, results or [None] * len(items))]
+    return results
 
 
 def _unsave(col, page, confirmed, cfg, sfile) -> dict:
