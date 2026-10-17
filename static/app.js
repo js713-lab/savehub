@@ -70,7 +70,7 @@ async function viewLibrary(params) {
     <button class="btn" onclick="addLinkModal()">+ Add link</button>
   </div>
   <div class="chips" id="pchips">${PLATFORMS.filter(p => p.enabled).map(p => `<span class="chip ${L.platforms.has(p.id)?'on':''}" data-p="${p.id}">${pmark(p.id, 'xs')}${esc(p.name)}<span class="n">${p.count}</span></span>`).join('')}</div>
-  <div class="chips" id="tchips"><span class="muted small" style="align-self:center">Tags:</span>${tags.slice(0, 24).map(t => `<span class="chip ${L.tags.has(t.tag)?'on':''}" data-t="${esc(t.tag)}">#${esc(t.tag)}<span class="n">${t.n}</span></span>`).join('')}</div>
+  <div class="chips" id="tchips"><span class="muted small" style="align-self:center">Tags:</span>${[...tags.slice(0, 24), ...[...L.tags].filter(x => !tags.slice(0, 24).some(t => t.tag === x.toLowerCase())).map(x => ({tag: x, n: (tags.find(t => t.tag === x.toLowerCase()) || {}).n || 0}))].map(t => `<span class="chip ${[...L.tags].some(x => x.toLowerCase() === t.tag.toLowerCase())?'on':''}" data-t="${esc(t.tag)}">#${esc(t.tag)}<span class="n">${t.n}</span></span>`).join('')}</div>
   <div class="row muted small" style="margin:6px 0 12px"><span id="count"></span><span style="flex:1"></span><button class="btn ghost small" onclick="retagAll()">↻ Re-run auto-tagging</button></div>
   <div id="results"></div>`;
   let t; $('#q').oninput = e => { clearTimeout(t); t = setTimeout(() => { L.q = e.target.value; if (L.q && L.sort === 'saved_at') {} loadItems(); }, 250); };
@@ -82,14 +82,16 @@ async function viewLibrary(params) {
   $('#tchips').onclick = e => { const c = e.target.closest('[data-t]'); if (!c) return; toggleTag(c.dataset.t); };
   loadItems();
 }
-function toggleTag(t) { L.tags.has(t) ? L.tags.delete(t) : L.tags.add(t); viewLibrary(new URLSearchParams()); }
+function toggleTag(t) { t = String(t).toLowerCase(); L.tags.has(t) ? L.tags.delete(t) : L.tags.add(t); viewLibrary(new URLSearchParams()); }
 async function loadItems() {
   const p = new URLSearchParams({q: L.q, platform: [...L.platforms].join(','), tag: [...L.tags].join(','), account_id: L.account, sort: L.sort === 'relevance' && !L.q ? 'saved_at' : L.sort, order: L.order, limit: 200});
   const r = await api('/api/items?' + p);
   $('#count').textContent = `${r.total} item${r.total === 1 ? '' : 's'}${L.q ? ` matching “${L.q}”` : ''}`;
   const el = $('#results');
+  el.onclick = e => { const t = e.target.closest('[data-tag]'); if (t) toggleTag(t.dataset.tag); };
+  el.onkeydown = e => { const t = e.target.closest('[data-tag]'); if (t && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleTag(t.dataset.tag); } };
   if (!r.items.length) { el.innerHTML = `<div class="panel muted">No items. Try another search, or import from <a href="#/connect">Connect apps</a>.</div>`; return; }
-  const tagsHtml = i => (i.tags || []).map(t => `<span class="tag" onclick="toggleTag('${esc(t)}')">#${esc(t)}</span>`).join(' ');
+  const tagsHtml = i => (i.tags || []).map(t => `<span class="tag" role="button" tabindex="0" data-tag="${esc(t)}">#${esc(t)}</span>`).join(' ');
   if (L.view === 'cards') el.innerHTML = `<div class="grid">${r.items.map(i => `
     <div class="card">
       <div class="meta">${pbadge(i.platform)}${i.is_sample ? '<span class="sample">SAMPLE</span>' : ''}<span>${esc(i.author || '')}${i.author_handle ? ' @' + esc(i.author_handle) : ''}</span></div>
@@ -122,7 +124,11 @@ function addLinkModal() {
     <p class="row"><button class="btn" onclick="addLink()">Save & auto-tag</button><button class="btn ghost" onclick="closeModal()">Cancel</button></p>`);
 }
 async function addLink() {
-  const r = await jpost('/api/items', {url: $('#nurl').value, title: $('#ntitle').value, content: $('#ncontent').value, platform: $('#nplat').value, account_id: $('#nacct').value || null});
+  const url = $('#nurl').value.trim();
+  if (!safeUrl(url)) { toast('Enter a link starting with http:// or https://', {kind: 'err'}); $('#nurl').focus(); return; }
+  let r;
+  try { r = await jpost('/api/items', {url, title: $('#ntitle').value, content: $('#ncontent').value, platform: $('#nplat').value, account_id: $('#nacct').value || null}); }
+  catch (e) { toast(e.message, {kind: 'err'}); return; }
   closeModal(); toast(r.created ? 'Saved & tagged: ' + (r.item.tags || []).join(', ') : 'Already in library'); await refreshMeta(); route();
 }
 
@@ -712,7 +718,13 @@ async function viewContacts() {
   window._loadContacts = load; let t; $('#cq').oninput = () => { clearTimeout(t); t = setTimeout(load, 200); }; $('#cacct').onchange = load; load();
 }
 async function delContact(id) { await api('/api/contacts/' + id, {method: 'DELETE'}); window._loadContacts(); }
-async function importContacts(inp) { const f = inp.files[0]; const fd = new FormData(); fd.append('kind', f.name.toLowerCase().endsWith('.vcf') ? 'vcf' : 'contacts_csv'); fd.append('file', f); const r = await api('/api/import', {method: 'POST', body: fd}); toast(`Contacts: ${r.created} added, ${r.duplicates} duplicates`); await refreshMeta(); window._loadContacts(); }
+async function importContacts(inp) {
+  const f = inp.files[0]; if (!f) return;
+  const fd = new FormData(); fd.append('kind', f.name.toLowerCase().endsWith('.vcf') ? 'vcf' : 'contacts_csv'); fd.append('file', f);
+  inp.value = '';   // so picking the same file again still triggers change
+  try { const r = await api('/api/import', {method: 'POST', body: fd}); toast(`Contacts: ${r.created} added, ${r.duplicates} duplicates`, {kind: 'ok'}); await refreshMeta(); window._loadContacts(); }
+  catch (e) { toast('Import failed: ' + e.message, {kind: 'err'}); }
+}
 
 // ---------------- Connect apps ----------------
 const KIND_FOR = {x: [], instagram: ['instagram_json'], facebook: ['facebook_json'], threads: ['threads_json'], messenger: ['messenger_json'], tiktok: ['tiktok_json'], whatsapp: ['whatsapp_txt'],
@@ -721,14 +733,14 @@ async function viewConnect(params) {
   const st = await api('/api/settings');
   if (params.get('x')) toast('X connected ✔'); if (params.get('x_error')) toast('X error: ' + params.get('x_error'));
   $('#view').innerHTML = `<h2>Connect apps</h2>
-  <p class="muted">Choose which apps SaveHub collects from (toggle). Honest status: only <span class="method live_api">LIVE API</span> X has an official bookmarks API. Every other app has <b>no public API for your saved/favourite items</b>, so SaveHub imports their <b>official data-export files</b> or links you paste.</p>
+  <p class="muted">Choose which apps SaveHub collects from (toggle). Honest status: only <span class="method live_api">LIVE API</span> X has an official bookmarks API. Every other app has <b>no public API for your saved/favourite items</b>, so SaveHub imports their <b>official data-export files</b> or links you paste. On the box, the browser collector + auto-sync (see <a href="#/accounts">Accounts</a>) also picks up new saves from logged-in accounts.</p>
   <div class="grid">${PLATFORMS.map(p => `<div class="card">
     <div class="row">${pbadge(p.id)}<span class="method ${p.method}">${p.method === 'live_api' ? 'LIVE API' : p.method === 'collector' ? 'ON-BOX COLLECTOR' : 'IMPORT'}</span><span style="flex:1"></span>
       <label class="small row"><input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="togglePlatform('${p.id}', this.checked)"> enabled</label></div>
     <div class="small">${esc(p.detail)}</div><div class="muted small">${p.count} items in library</div>
     ${p.id === 'x' ? `<div class="small">Client ID: ${st.x.client_id_set ? '✔ set' : '✖ not set (Settings)'} · ${st.x.connected ? '✔ connected as @' + esc(st.x.user?.username || '') : 'not connected'}</div>
       <div class="row"><a class="btn small" href="/api/x/auth">Connect X (OAuth 2.0 PKCE)</a><button class="btn ghost small" onclick="xSync()">Sync bookmarks</button></div>`
-    : p.method === 'collector' ? `<div class="small">Log in once in a terminal on the box (asks for the Apple ID, password and 2FA code; only the trusted session is kept, encrypted):<br><code>python -m savehub.collector login ${esc(p.id)} --account @&lt;handle&gt;</code><br>Then auto-sync (Accounts page) indexes new and changed files. Read-only: nothing on iCloud is ever deleted.</div>`
+    : p.method === 'collector' ? `<div class="small">Log in (terminal on the box): <code>python -m savehub.collector login ${esc(p.id)} --account @&lt;handle&gt;</code><br>Hand it to someone on the box desktop: <code>python -m savehub.collector login-terminal ${esc(p.id)} --account @&lt;handle&gt;</code></div>`
     : `<div class="row"><button class="btn small" onclick="importModal('${p.id}')">Import…</button></div>`}
   </div>`).join('')}</div>
   <div class="panel" style="margin-top:16px"><h4>Quick paste links (any app — 小红书 / 抖音 / 微信 share text works)</h4>
@@ -807,4 +819,5 @@ async function route() {
   try { await (ROUTES[path] || viewLibrary)(new URLSearchParams(qs || '')); } catch (e) { $('#view').innerHTML = `<div class="panel">Error: ${esc(e.message)}</div>`; }
 }
 window.addEventListener('hashchange', route);
+window.addEventListener('unhandledrejection', e => { const m = (e.reason && e.reason.message) || String(e.reason || 'Something went wrong'); toast(m, {kind: 'err'}); e.preventDefault(); });
 refreshMeta().then(route);

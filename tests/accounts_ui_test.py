@@ -29,7 +29,8 @@ with sync_playwright() as p:
 
     # --- add flow: step 1 platform grid
     pg.click("#addAcct"); pg.wait_for_selector(".ptile")
-    check("platform grid shows all 11 apps", pg.locator(".ptile").count() == 11)
+    n_apps = len(api("/api/platforms"))
+    check(f"platform grid shows all {n_apps} apps", pg.locator(".ptile").count() == n_apps, str(pg.locator(".ptile").count()))
     check("first tile focused", pg.evaluate("document.activeElement.classList.contains('ptile')"))
     shot(pg, "09_add_account_pick_platform")
     pg.keyboard.press("ArrowRight"); pg.keyboard.press("ArrowRight")   # x -> threads -> instagram
@@ -174,3 +175,4 @@ with sync_playwright() as p:
     check("no JS errors", not errors, "; ".join(errors))
     b.close()
 print(f"\n{sum(results)}/{len(results)} checks passed")
+raise SystemExit(0 if all(results) else 1)
