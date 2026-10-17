@@ -39,6 +39,15 @@ def overflowing(pg):
     }""")
 
 
+def wrapped_card_heads(pg):
+    """Connect-apps cards whose 'enabled' toggle wrapped onto a second line below the app badge."""
+    return pg.evaluate("""() => [...document.querySelectorAll('#view .card .chead')].filter(h => {
+        const b = h.querySelector('.pbadge'), l = h.querySelector('label'); if (!b || !l) return false;
+        const rb = b.getBoundingClientRect(), rl = l.getBoundingClientRect();
+        return Math.abs((rb.top + rb.bottom) / 2 - (rl.top + rl.bottom) / 2) > 6 || rl.right > h.getBoundingClientRect().right + 1;
+      }).map(h => h.querySelector('.pbadge').textContent.trim())""")
+
+
 def run_theme(b, theme):
     ctx = b.new_context(viewport={"width": 1366, "height": 900}, http_credentials={"username": AUTH[0], "password": AUTH[1]} if AUTH else None)
     ctx.add_init_script(f"localStorage.theme='{theme}';")
@@ -57,6 +66,8 @@ def run_theme(b, theme):
         for w in (1366, 1024):
             pg.set_viewport_size({"width": w, "height": 900}); pg.wait_for_timeout(150)
             ov = overflowing(pg); check(f"[{theme}] {p}: nothing overflows its panel at {w}px", not ov, str(ov[:5]))
+            if p == "connect":
+                wr = wrapped_card_heads(pg); check(f"[{theme}] connect: every card's enabled toggle stays on the badge line at {w}px", not wr, str(wr))
         pg.set_viewport_size({"width": 1366, "height": 900})
         pg.screenshot(path=str(OUT / f"{theme}_{p.replace('?', '_').replace('=', '')}.png"), full_page=True)
     # ---- library flows

@@ -13,7 +13,7 @@ const COLORS = {x:'#111',threads:'#333',instagram:'#d62976',facebook:'#0866ff',m
 let PLATFORMS = [], ACCOUNTS = [], VAULT = {enabled: false};
 const pname = id => (PLATFORMS.find(p => p.id === id) || {}).name || id;
 // Platform badge: real brand logo (static/logos/<id>.svg, from Simple Icons) on the brand colour + the platform name.
-const pbadge = id => `<span class="pbadge">${pmark(id, 'xs')}${esc(pname(id))}</span>`;
+const pbadge = id => `<span class="pbadge" title="${esc(pname(id))}">${pmark(id, 'xs')}<span class="pn">${esc(pname(id))}</span></span>`;
 const fdate = s => s ? new Date(s).toLocaleDateString(undefined, {year:'numeric', month:'short', day:'numeric'}) : '';
 let MODAL_RET = null, MODAL_ON_CLOSE = null;
 const modal = (html, cls = '', labelledby = '') => {
@@ -735,7 +735,7 @@ async function viewConnect(params) {
   $('#view').innerHTML = `<h2>Connect apps</h2>
   <p class="muted">Choose which apps SaveHub collects from (toggle). Honest status: only <span class="method live_api">LIVE API</span> X has an official bookmarks API. Every other app has <b>no public API for your saved/favourite items</b>, so SaveHub imports their <b>official data-export files</b> or links you paste. On the box, the browser collector + auto-sync (see <a href="#/accounts">Accounts</a>) also picks up new saves from logged-in accounts.</p>
   <div class="grid">${PLATFORMS.map(p => `<div class="card">
-    <div class="row">${pbadge(p.id)}<span class="method ${p.method}" title="${p.method === 'collector' ? 'Collected on the box by the SaveHub collector' : p.method === 'live_api' ? 'Official API' : 'Import export files or paste links'}">${p.method === 'live_api' ? 'LIVE API' : p.method === 'collector' ? 'ON-BOX' : 'IMPORT'}</span><span style="flex:1"></span>
+    <div class="row chead">${pbadge(p.id)}<span class="method ${p.method}" title="${p.method === 'collector' ? 'Collected on the box by the SaveHub collector' : p.method === 'live_api' ? 'Official API' : 'Import export files or paste links'}">${p.method === 'live_api' ? 'LIVE API' : p.method === 'collector' ? 'ON-BOX' : 'IMPORT'}</span><span style="flex:1"></span>
       <label class="small row" style="white-space:nowrap"><input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="togglePlatform('${p.id}', this.checked)"> enabled</label></div>
     <div class="small">${esc(p.detail)}</div><div class="muted small">${p.count} items in library</div>
     ${p.id === 'x' ? `<div class="small">Client ID: ${st.x.client_id_set ? '✔ set' : '✖ not set (Settings)'} · ${st.x.connected ? '✔ connected as @' + esc(st.x.user?.username || '') : 'not connected'}</div>
