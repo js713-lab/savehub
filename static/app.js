@@ -63,8 +63,8 @@ async function viewLibrary(params) {
   $('#view').innerHTML = `
   <div class="toolbar">
     <input class="search" id="q" placeholder="Search everything… (English / 中文, e.g. coffee, 咖啡, python)" value="${esc(L.q)}">
-    <select id="acct">${accountOptions(L.account)}</select>
-    <select id="sort">${[['saved_at','Date saved'],['relevance','Relevance'],['platform','Platform'],['author','Author'],['title','Title']].map(([v,l]) => `<option value="${v}" ${L.sort===v?'selected':''}>Sort: ${l}</option>`).join('')}</select>
+    <select id="acct" aria-label="Filter by account">${accountOptions(L.account)}</select>
+    <select id="sort" aria-label="Sort items">${[['saved_at','Date saved'],['relevance','Relevance'],['platform','Platform'],['author','Author'],['title','Title']].map(([v,l]) => `<option value="${v}" ${L.sort===v?'selected':''}>Sort: ${l}</option>`).join('')}</select>
     <button class="btn ghost" id="order" title="Toggle order">${L.order === 'desc' ? '↓ Desc' : '↑ Asc'}</button>
     <button class="btn ghost" id="vt">${L.view === 'cards' ? '☰ Table' : '▦ Cards'}</button>
     <button class="btn" onclick="addLinkModal()">+ Add link</button>
@@ -709,7 +709,7 @@ document.addEventListener('keydown', e => {
 async function viewContacts() {
   $('#view').innerHTML = `<div class="row" style="margin-bottom:10px"><h2 style="margin:0;flex:1">Contacts</h2>
     <label class="btn ghost">⬆ Import vCard / CSV<input type="file" accept=".vcf,.csv" class="hidden" onchange="importContacts(this)"></label></div>
-    <div class="toolbar"><input class="search" id="cq" placeholder="Search contacts by name, phone, email, org…"><select id="cacct">${accountOptions('')}</select></div><div id="ctable"></div>`;
+    <div class="toolbar"><input class="search" id="cq" placeholder="Search contacts by name, phone, email, org…"><select id="cacct" aria-label="Filter contacts by account">${accountOptions('')}</select></div><div id="ctable"></div>`;
   const load = async () => {
     const r = await api('/api/contacts?' + new URLSearchParams({q: $('#cq').value, account_id: $('#cacct').value}));
     $('#ctable').innerHTML = `<div class="muted small" style="margin-bottom:6px">${r.total} contacts</div><div class="tablewrap"><table class="ctable"><thead><tr><th>Name</th><th>Phones</th><th>Emails</th><th>Org</th><th>Platform</th><th>Account</th><th></th></tr></thead><tbody>
@@ -745,8 +745,8 @@ async function viewConnect(params) {
   </div>`).join('')}</div>
   <div class="panel" style="margin-top:16px"><h4>Quick paste links (any app — 小红书 / 抖音 / 微信 share text works)</h4>
     <textarea id="paste" placeholder="Paste one or more links or share texts here…"></textarea>
-    <div class="row" style="margin-top:8px"><select id="pplat"><option value="auto">Auto-detect platform</option>${PLATFORMS.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
-    <select id="pacct">${accountOptions('').replace('All accounts','— link to account —')}</select><button class="btn" onclick="doPaste()">Import pasted links</button></div></div>`;
+    <div class="row" style="margin-top:8px"><select id="pplat" aria-label="Platform of the pasted links"><option value="auto">Auto-detect platform</option>${PLATFORMS.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
+    <select id="pacct" aria-label="Account to link the pasted links to">${accountOptions('').replace('All accounts','— link to account —')}</select><button class="btn" onclick="doPaste()">Import pasted links</button></div></div>`;
 }
 async function togglePlatform(id, on) {
   const st = (await api('/api/settings')).settings; const s = new Set(st.enabled_platforms); on ? s.add(id) : s.delete(id);

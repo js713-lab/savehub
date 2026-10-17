@@ -48,6 +48,37 @@ def wrapped_card_heads(pg):
       }).map(h => h.querySelector('.pbadge').textContent.trim())""")
 
 
+def a11y_problems(pg):
+    """Visible form fields / controls without an accessible name, and text below WCAG AA contrast
+    (4.5:1, or 3:1 for large/bold text) against its first opaque background. Elements sitting on a
+    gradient/image background (e.g. account avatars) are skipped since their colour can't be computed."""
+    return pg.evaluate("""() => {
+      const out = [];
+      const nm = el => (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.innerText || el.value || '').trim();
+      for (const el of document.querySelectorAll('button, a[href], [role=button]')) {
+        if (el.offsetParent && !nm(el) && !el.querySelector('img[alt]:not([alt=""]), svg[aria-label]')) out.push('unnamed control: ' + el.outerHTML.slice(0, 90)); }
+      for (const el of document.querySelectorAll('input:not([type=hidden]):not([type=file]), select, textarea')) {
+        if (!el.offsetParent) continue;
+        if (!(el.id && document.querySelector('label[for="' + el.id + '"]')) && !el.closest('label') && !el.getAttribute('aria-label') && !el.getAttribute('title') && !el.getAttribute('placeholder'))
+          out.push('unlabeled field: ' + (el.id || el.outerHTML.slice(0, 60))); }
+      const lum = c => { const m = c.match(/[\\d.]+/g); if (!m) return null; const [r, g, b] = m.slice(0, 3).map(v => { v = v / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      const bgOf = el => { while (el) { const cs = getComputedStyle(el); if (cs.backgroundImage && cs.backgroundImage !== 'none') return null;
+          const m = cs.backgroundColor.match(/[\\d.]+/g); if (m && (m.length < 4 || +m[3] > 0.5)) return cs.backgroundColor; el = el.parentElement; } return 'rgb(255,255,255)'; };
+      const seen = new Set();
+      for (const el of document.querySelectorAll('header *, #view *, #modalcard *')) {
+        if (!el.offsetParent) continue;
+        const t = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent.trim()).join(''); if (!t) continue;
+        const cs = getComputedStyle(el); if (+cs.opacity < 0.99 || el.closest('[disabled], .muted')) continue;
+        const bg = bgOf(el); if (!bg) continue; const f = lum(cs.color), b = lum(bg); if (f == null || b == null) continue;
+        const ratio = (Math.max(f, b) + 0.05) / (Math.min(f, b) + 0.05), fs = parseFloat(cs.fontSize);
+        const big = fs >= 18.66 || (fs >= 14 && +cs.fontWeight >= 700);
+        const k = el.tagName + '.' + el.className + cs.color + bg;
+        if (ratio < (big ? 3 : 4.5) && !seen.has(k)) { seen.add(k); out.push('low contrast ' + ratio.toFixed(2) + ': ' + el.tagName.toLowerCase() + '.' + el.className + ' "' + t.slice(0, 24) + '" ' + cs.color + ' on ' + bg); }
+      }
+      return out;
+    }""")
+
+
 def run_theme(b, theme):
     ctx = b.new_context(viewport={"width": 1366, "height": 900}, http_credentials={"username": AUTH[0], "password": AUTH[1]} if AUTH else None)
     ctx.add_init_script(f"localStorage.theme='{theme}';")
@@ -63,6 +94,7 @@ def run_theme(b, theme):
         check(f"[{theme}] {p}: theme applied", pg.evaluate("document.documentElement.dataset.theme") == theme)
         check(f"[{theme}] {p}: rendered (no error panel)", "Error:" not in pg.inner_text("#view")[:200], pg.inner_text("#view")[:120])
         bi = broken_images(pg); check(f"[{theme}] {p}: no broken images", not bi, str(bi[:5]))
+        ap = a11y_problems(pg); check(f"[{theme}] {p}: every field/control has an accessible name and text meets AA contrast", not ap, "\n  " + "\n  ".join(ap[:8]))
         for w in (1366, 1024, 390):
             pg.set_viewport_size({"width": w, "height": 900}); pg.wait_for_timeout(150)
             ov = overflowing(pg); check(f"[{theme}] {p}: nothing overflows its panel at {w}px", not ov, str(ov[:5]))

@@ -1,5 +1,5 @@
-:root{--bg:#0d1117;--panel:#161b22;--panel2:#1f2630;--text:#e6edf3;--muted:#8b949e;--border:#30363d;--accent:#7c5cff;--accent2:#2dd4bf;--chip:#232b36;--warn:#f59e0b;--shadow:0 4px 18px rgba(0,0,0,.35)}
-[data-theme=light]{--bg:#f6f7fb;--panel:#fff;--panel2:#f0f2f7;--text:#1b1f24;--muted:#5b6573;--border:#dde1e8;--chip:#eef0f5;--shadow:0 4px 14px rgba(20,30,60,.08)}
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#1f2630;--text:#e6edf3;--muted:#8b949e;--border:#30363d;--accent:#6d4aff;--accent2:#2dd4bf;--chip:#232b36;--warn:#f59e0b;--shadow:0 4px 18px rgba(0,0,0,.35)}
+[data-theme=light]{--accent2:#0f766e;--warn:#b45309;--bg:#f6f7fb;--panel:#fff;--panel2:#f0f2f7;--text:#1b1f24;--muted:#5b6573;--border:#dde1e8;--chip:#eef0f5;--shadow:0 4px 14px rgba(20,30,60,.08)}
 *{box-sizing:border-box}body{margin:0;font:14px/1.5 system-ui,-apple-system,"Segoe UI","PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text)}
 a{color:var(--accent2);text-decoration:none}.muted{color:var(--muted)}.small{font-size:12px}.hidden{display:none!important}
 .top{position:sticky;top:0;z-index:5;display:flex;gap:16px;align-items:center;padding:10px 20px;background:var(--panel);border-bottom:1px solid var(--border);flex-wrap:wrap}
@@ -8,7 +8,7 @@ nav{display:flex;gap:4px;flex:1;flex-wrap:wrap}nav a{color:var(--muted);padding:
 main{max-width:1280px;margin:0 auto;padding:20px}
 .samplebar{background:color-mix(in srgb,var(--warn) 18%,var(--panel));border-bottom:1px solid var(--warn);padding:8px 20px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap}
 .btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px}.btn:hover{filter:brightness(1.1)}
-.btn.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--border)}.btn.small{padding:4px 10px;font-size:12px}.btn.danger{background:#e5484d}
+.btn.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--border)}.btn.small{padding:4px 10px;font-size:12px}.btn.danger{background:#dc2626}
 input,select,textarea{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font:inherit}
 textarea{width:100%;min-height:90px}input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);border-color:transparent}
 .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}.search{flex:1;min-width:240px;font-size:15px;padding:10px 14px}
@@ -29,7 +29,7 @@ th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);ver
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
 .kpi{font-size:30px;font-weight:800}.bar{height:10px;border-radius:5px;background:var(--accent)}.barrow{display:grid;grid-template-columns:150px 1fr 36px;gap:8px;align-items:center;margin:6px 0;font-size:13px}
 .digest{font-size:15px;line-height:1.65;white-space:pre-wrap}
-.method{font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px}.method.live_api{background:#16a34a;color:#fff}.method.import{background:#475569;color:#fff}.method.collector{background:#3693f3;color:#fff}
+.method{font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px}.method.live_api{background:#15803d;color:#fff}.method.import{background:#475569;color:#fff}.method.collector{background:#1d6fd6;color:#fff}
 .modal{position:fixed;inset:0;background:rgba(5,8,15,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:20;padding:16px;opacity:0;transition:opacity .18s ease}.modal.show{opacity:1}
 .modal-card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:20px;width:min(640px,100%);max-height:90vh;overflow:auto;box-shadow:0 24px 60px rgba(0,0,0,.45);transform:translateY(10px) scale(.98);transition:transform .2s cubic-bezier(.2,.8,.2,1)}.modal.show .modal-card{transform:none}
 .form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}.form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);min-width:0}.form input,.form select,.form textarea{width:100%;min-width:0}.form .full{grid-column:1/-1}
