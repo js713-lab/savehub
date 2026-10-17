@@ -38,7 +38,8 @@ class FakeX:
         if u.path.startswith("/i/flow/login"):
             return route.fulfill(status=200, content_type="text/html", body=(FX / "x_login.html").read_text())
         if not self.logged_in:
-            return route.fulfill(status=302, headers={"location": "https://x.com/i/flow/login?redirect_after_login=%2Fi%2Fbookmarks"})
+            # client-side redirect: a fulfilled 302 is followed outside the route (would hit the real x.com)
+            return route.fulfill(status=200, content_type="text/html", body='<script>location.replace("https://x.com/i/flow/login?redirect_after_login=%2Fi%2Fbookmarks")</script>')
         if u.path == "/i/bookmarks":
             return route.fulfill(status=200, content_type="text/html", body=(FX / "x_bookmarks.html").read_text())
         m = re.match(r"^/(\w+)/status/(\d+)$", u.path)
@@ -106,14 +107,16 @@ def test_registry_and_stubs():
     expected = {"x", "instagram", "threads", "facebook", "tiktok", "douyin", "xiaohongshu", "wechat", "whatsapp", "messenger"}
     assert set(REGISTRY) == expected
     impl = {p["platform"]: p["implemented"] for p in list_platforms()}
-    assert impl.pop("x") is True and not any(impl.values())
-    for name in expected - {"x"}:
+    implemented = {k for k, v in impl.items() if v}
+    assert {"x", "threads", "instagram"} <= implemented and impl["wechat"] is False     # WeChat: no usable web client
+    for name in implemented: assert get_collector(name).notes or name == "x"
+    for name in expected - implemented:
         c = get_collector(name)
         for call in (lambda: c.collect(None, RunConfig()), lambda: c.unsave(None, None, RunConfig()), lambda: c.is_login_page(None)):
             with pytest.raises(NotImplementedPlatform, match=rf"'{name}' collector is not implemented yet.*TODO"): call()
         assert c.notes and c.saved_url
     with pytest.raises(Exception, match="unknown platform"): get_collector("myspace")
-    with pytest.raises(NotImplementedPlatform): runner.run_collect("tiktok", RunConfig())
+    with pytest.raises(NotImplementedPlatform): runner.run_collect("wechat", RunConfig())
 
 
 def test_unsave_off_and_dry_run_by_default(tmp_path):
@@ -130,7 +133,7 @@ def test_unsave_off_and_dry_run_by_default(tmp_path):
     # CLI: --no-push + --unsave refused; unknown platform / stub exit codes
     r = subprocess.run([sys.executable, "-m", "savehub.collector", "collect", "x", "--no-push", "--unsave"], cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 1 and "cannot be combined" in r.stdout
-    r = subprocess.run([sys.executable, "-m", "savehub.collector", "collect", "douyin"], cwd=ROOT, capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-m", "savehub.collector", "collect", "wechat"], cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 3 and json.loads(r.stdout)["status"] == "NotImplementedPlatform"
 
 
@@ -384,11 +387,13 @@ def test_mcp_login_status_and_list_platforms(mcpmod):
     r = m.login_status("x", "@bob"); assert not r["logged_in"] and "--account @bob" in r["fix"]
     r = m.login_status("x", "@nobody"); assert r["accounts"][0]["session"] == "missing" and not r["logged_in"]
     assert "error" in m.login_status("myspace") and "error" in m.login_status("x", "../../etc")
-    r = m.login_status("instagram"); assert r["collector_implemented"] is False and "not implemented" in r["note"]
+    r = m.login_status("wechat"); assert r["collector_implemented"] is False and "not implemented" in r["note"]
+    r = m.login_status("instagram"); assert r["collector_implemented"] is True and r["accounts"][0]["account"] == "@food"
     lp = {p["id"]: p for p in m.list_platforms()["platforms"]}
     assert lp["x"]["collector"]["supported"] and lp["x"]["collector"]["logged_in_accounts"] == 1
     assert {a["account"] for a in lp["x"]["collector"]["accounts"]} == {"@alice", "@bob"}
-    assert lp["instagram"]["collector"]["implemented"] is False and lp["instagram"]["collector"]["accounts"][0]["account"] == "@food"
+    assert lp["instagram"]["collector"]["implemented"] is True and lp["instagram"]["collector"]["accounts"][0]["account"] == "@food"
+    assert lp["wechat"]["collector"]["implemented"] is False
     assert lp["web"]["collector"]["supported"] is False if "web" in lp else True
     assert "available" in m.list_platforms()["collector_runtime"]
 
@@ -402,7 +407,7 @@ def test_mcp_collect_guards(mcpmod, monkeypatch):
     t = time.time()
     r = arun(m.collect("x")); assert r["status"] == "need_login" and "login x --account @<handle>" in r["error"]
     r = arun(m.collect("x", "@zed")); assert r["status"] == "need_login" and "login x --account @zed" in r["error"]
-    assert arun(m.collect("tiktok"))["status"] == "not_implemented"
+    assert arun(m.collect("wechat"))["status"] == "not_implemented"
     assert "unknown platform" in arun(m.collect("myspace"))["error"]
     assert "max_items" in arun(m.collect("x", max_items=0))["error"]
     _sess(d, "x@alice.json")

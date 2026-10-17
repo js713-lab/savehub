@@ -41,12 +41,18 @@ def parse_name(path) -> tuple:
     return p, (a or DEFAULT_ACCOUNT)
 
 
-def save_state(context, path: Path) -> Path:
+def save_state(context, path: Path, indexed_db: bool = False) -> Path:
+    """indexed_db=True also stores IndexedDB (Playwright >= 1.51) - needed by apps such as WhatsApp Web whose login
+    keys live there; Playwright restores it from the same file when the context is created."""
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
     try: os.chmod(path.parent, 0o700)
     except OSError: pass
     tmp = path.with_suffix(".json.tmp")
-    state = context.storage_state()
+    if indexed_db:
+        try: state = context.storage_state(indexed_db=True)
+        except TypeError: state = context.storage_state()       # older Playwright: cookies + localStorage only
+    else:
+        state = context.storage_state()
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f: json.dump(state, f)
     os.replace(tmp, path); os.chmod(path, 0o600)

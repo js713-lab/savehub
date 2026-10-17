@@ -46,10 +46,11 @@ class CollectedItem:
     media_url: str = ""
     extra: dict = field(default_factory=dict)
     source_account: str = ""     # account key (handle w/o '@') of the session it was collected with; "" = default session
+    title: str = ""              # explicit title (e.g. note/link title, contact name); default = first 120 chars of text
 
     def to_savehub(self, account_id: Optional[int] = None, collected_at: str = "") -> dict:
         """Payload for POST /api/items (also accepted by db.add_item)."""
-        title = " ".join(self.text.split())[:120] or (f"@{self.author_handle} on {self.platform}" if self.author_handle else self.url)
+        title = " ".join(self.title.split())[:120] or " ".join(self.text.split())[:120] or (f"@{self.author_handle} on {self.platform}" if self.author_handle else self.url)
         d = {"platform": self.platform, "url": self.url, "title": title, "content": self.text,
              "author": self.author, "author_handle": self.author_handle, "media_url": self.media_url or None,
              "external_id": self.external_id,
@@ -106,7 +107,10 @@ class Collector:
     home_url: str = ""                 # page opened by `login`
     login_url: str = ""
     saved_url: str = ""                # the saved / bookmarks page
-    notes: str = ""                    # TODO notes for stubs
+    notes: str = ""                    # TODO notes for stubs / caveats for implemented collectors
+    kind: str = "saves"                # "saves" (saved/bookmarked posts) | "contacts" (chat/contact list collector)
+    supports_unsave: bool = True       # False: the app has no un-save action for what is collected (--unsave refused)
+    needs_indexed_db: bool = False     # True: the login lives in IndexedDB (e.g. WhatsApp Web) -> saved with the session
 
     def is_login_page(self, page) -> bool:
         raise NotImplementedError
@@ -129,7 +133,8 @@ class Collector:
             raise NeedLogin(self.platform, session_file, f"redirected to login page ({page.url})")
 
     def describe(self) -> dict:
-        return {"platform": self.platform, "name": self.name, "implemented": self.implemented,
+        return {"platform": self.platform, "name": self.name, "implemented": self.implemented, "kind": self.kind,
+                "supports_unsave": self.supports_unsave and self.implemented,
                 "saved_url": self.saved_url, "login_url": self.login_url, "notes": self.notes}
 
 
@@ -139,7 +144,8 @@ class StubCollector(Collector):
 
     def _nope(self, *_a, **_k):
         raise NotImplementedPlatform(
-            f"The '{self.platform}' collector is not implemented yet (only 'x' is). "
+            f"The '{self.platform}' collector is not implemented yet "
+            f"(implemented: {', '.join(k for k, c in sorted(REGISTRY.items()) if c.implemented)}). "
             f"Saved-items page: {self.saved_url or 'n/a'}. TODO: {self.notes}")
 
     is_login_page = is_logged_in = collect = unsave = _nope

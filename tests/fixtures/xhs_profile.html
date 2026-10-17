@@ -1,0 +1,24 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Js 的个人主页 - 小红书</title><style>section{height:700px;display:block}</style></head><body>
+<!-- Synthetic xiaohongshu.com/user/profile/<id> (2026 class names). Own notes render first; the 收藏 tab swaps in collected notes
+     and fires /api/sns/web/v2/note/collect/page like the real (signed) request. Fictional. -->
+<div class="side-bar"><ul><li class="user side-bar-component"><a class="link-wrapper" href="/user/profile/5f0000000000000000000abc"><span>我</span></a></li></ul></div>
+<div class="reds-tabs-list"><div class="reds-tab-item active">笔记</div><div class="reds-tab-item" id="fav">收藏</div><div class="reds-tab-item">点赞</div></div>
+<div class="feeds-container" id="feed"><section class="note-item"><a href="/explore/6600000000000000000000ff"><img src="https://sns-webpic-qc.xhscdn.com/own.jpg"></a><div class="title"><span>我自己的笔记</span></div></section></div>
+<script>
+const N = [
+ {id:"6700000000000000000000a1", t:"吉隆坡咖啡馆合集 ☕", a:"咖啡猫", uid:"5e00000000000000000000a1", img:"https://sns-webpic-qc.xhscdn.com/a1.jpg", tok:"ABtokA1"},
+ {id:"6700000000000000000000b2", t:"槟城美食攻略", a:"吃货小王", uid:"5e00000000000000000000b2", img:"https://sns-webpic-qc.xhscdn.com/b2.jpg", tok:"ABtokB2", video:true, newlink:true},
+ {id:"6700000000000000000000a1", t:"吉隆坡咖啡馆合集 ☕", a:"咖啡猫", uid:"5e00000000000000000000a1", img:"https://sns-webpic-qc.xhscdn.com/a1.jpg", tok:"ABtokA1"},
+];
+let i = 0, fetched = false, fav = false;
+function card(n){ const href = n.newlink ? `/user/profile/${n.uid}/${n.id}?xsec_token=${n.tok}&xsec_source=pc_collect` : `/explore/${n.id}?xsec_token=${n.tok}&xsec_source=pc_collect`;
+  return `<section class="note-item"><a class="cover" href="${href}"><img src="${n.img}">${n.video?'<span class="play-icon"></span>':""}</a>
+   <div class="footer"><a class="title"><span>${n.t}</span></a><div class="author-wrapper"><a class="author" href="/user/profile/${n.uid}?xsec_token=x"><img class="author-avatar" src="https://sns-avatar.xhscdn.com/${n.uid}.jpg"><span class="name">${n.a}</span></a>
+   <span class="like-wrapper"><span class="count">1.2万</span></span></div></div></section>`; }
+function more(){ if (!fav) return; const f = document.getElementById("feed");
+  for (let n = 0; n < 2 && i < N.length; n++) f.insertAdjacentHTML("beforeend", card(N[i++]));
+  if (i >= N.length && !fetched) { fetched = true; fetch("/api/sns/web/v2/note/collect/page?num=30&cursor=abc&user_id=5f0000000000000000000abc"); } }
+document.getElementById("fav").addEventListener("click", (e) => { document.querySelectorAll(".reds-tab-item").forEach(t => t.classList.remove("active"));
+  e.target.classList.add("active"); fav = true; document.getElementById("feed").innerHTML = ""; more(); });
+window.addEventListener("scroll", () => { if (window.innerHeight + window.scrollY > document.body.scrollHeight - 300) more(); });
+</script></body></html>

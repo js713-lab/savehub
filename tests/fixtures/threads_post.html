@@ -1,0 +1,14 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Threads post</title></head><body>
+<nav><div role="button"><svg aria-label="Create"></svg></div></nav>
+<div data-pressable-container="true" id="main"><a href="/@{{H}}">{{H}}</a> <a href="/@{{H}}/post/{{CODE}}"><time datetime="2026-01-01T00:00:00Z">1d</time></a>
+ <div dir="auto"><span>post body</span></div><div role="button" id="more"><svg aria-label="More" width="20" height="20"><rect width="20" height="20"/></svg></div></div>
+<div data-pressable-container="true"><a href="/@other/post/REPLY1"><time datetime="2026-01-02T00:00:00Z">1d</time></a><div role="button"><svg aria-label="More"></svg></div></div>
+<div id="menu"></div>
+<script>
+let saved = {{SAVED}};
+document.getElementById("more").addEventListener("click", () => {
+  document.getElementById("menu").innerHTML = `<div role="menu"><div role="menuitem" id="mi">${saved ? "Unsave" : "Save"}</div><div role="menuitem">Mute</div></div>`;
+  document.getElementById("mi").addEventListener("click", () => { if (saved) { saved = false; fetch("/__test/unsave?id={{CODE}}"); } document.getElementById("menu").innerHTML = ""; });
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") document.getElementById("menu").innerHTML = ""; });
+</script></body></html>

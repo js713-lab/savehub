@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!-- Synthetic, trimmed threads.com/saved DOM shape (2026). All people/text fictional. Embedded JSON + XHR on scroll simulate Meta's data flow. -->
+<html lang="en"><head><meta charset="utf-8"><title>Saved • Threads</title><style>.p{min-height:500px;border-bottom:1px solid #ccc}</style>
+<script type="application/json" data-sjs>{"require":[["ScheduledServerJS","handle",null,[{"__bbox":{"result":{"data":{"saved":{"edges":[{"node":{"thread_items":[{"post":{"pk":"3401","code":"DThrA1","user":{"username":"ada.threads","full_name":"Ada Threads","profile_pic_url":"https://scontent.cdninstagram.com/pp/ada.jpg"},"caption":{"text":"Embedded JSON caption for A1 — 中文 ok"},"taken_at":1760000000,"media_type":19,"image_versions2":{"candidates":[]}}}]}}]}}}}}]]]}</script>
+</head><body>
+<nav><a href="/"><svg aria-label="Home"></svg></a><a href="/search">Search</a><div role="button"><svg aria-label="Create"></svg></div><a href="/activity"><svg aria-label="Notifications"></svg></a><a href="/@js.sample"><svg aria-label="Profile"></svg></a></nav>
+<main><h1>Saved</h1><div id="feed"></div></main>
+<script>
+const P = [
+ {code:"DThrA1", h:"ada.threads", t:"2025-10-09T08:53:20.000Z", text:"DOM text for A1"},
+ {code:"DThrB2", h:"kopi.lover", t:"2026-10-11T02:00:00.000Z", text:"Best kopi in KL, a thread 🧵", img:"https://scontent.cdninstagram.com/v/kopi.jpg"},
+ {code:"DThrC3", h:"quoter", t:"2026-10-12T02:00:00.000Z", text:"Agree with this", quote:{code:"DThrQQ", h:"inner", text:"quoted inner text"}},
+ {code:"DThrB2", h:"kopi.lover", t:"2026-10-11T02:00:00.000Z", text:"Best kopi in KL, a thread 🧵", img:"https://scontent.cdninstagram.com/v/kopi.jpg"},
+ {code:"DThrD4", h:"vid.maker", t:"2026-10-13T02:00:00.000Z", text:"Short clip", video:true},
+];
+function card(p){
+  const q = p.quote ? `<div class="q"><a href="/@${p.quote.h}/post/${p.quote.code}"><span>${p.quote.h}</span></a><a href="/@${p.quote.h}/post/${p.quote.code}"><time datetime="2020-01-01T00:00:00Z">1y</time></a><div dir="auto"><span>${p.quote.text}</span></div></div>` : "";
+  return `<div class="p" data-pressable-container="true"><div><a href="/@${p.h}"><img alt="${p.h}'s profile picture" src="https://scontent.cdninstagram.com/pp/x.jpg"></a>
+    <a href="/@${p.h}"><span>${p.h}</span></a> <a href="/@${p.h}/post/${p.code}"><time datetime="${p.t}">1d</time></a></div>
+    <div dir="auto"><span>${p.text}</span></div>${p.img?`<img alt="photo" src="${p.img}">`:""}${p.video?"<video></video>":""}${q}
+    <div role="button"><svg aria-label="More"></svg></div></div>`;
+}
+let shown = 0, fetched = false;
+function more(){ const f = document.getElementById("feed"); for (let i = 0; i < 2 && shown < P.length; i++) f.insertAdjacentHTML("beforeend", card(P[shown++]));
+  if (shown >= P.length && !fetched) { fetched = true; fetch("/api/graphql", {method:"POST"}); } }
+more(); window.addEventListener("scroll", () => { if (window.innerHeight + window.scrollY > document.body.scrollHeight - 300) more(); });
+</script></body></html>

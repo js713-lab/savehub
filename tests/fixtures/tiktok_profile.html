@@ -1,0 +1,22 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Js Sample (@js.sample) | TikTok</title><style>.it{height:700px}</style></head><body>
+<!-- Synthetic tiktok.com/@user profile (2026 data-e2e attributes). Own videos first; Favorites tab swaps the list and fetches /api/user/collect/item_list/. Fictional. -->
+<header><a data-e2e="nav-profile" href="/@js.sample"><span data-e2e="profile-icon"></span></a><span data-e2e="inbox-icon"></span></header>
+<main><div role="tablist"><p role="tab" data-e2e="videos-tab">Videos</p><p role="tab" data-e2e="favorites-tab">Favorites</p><p role="tab" data-e2e="liked-tab">Liked</p></div>
+<div id="list"><div data-e2e="user-post-item-list"><div data-e2e="user-post-item" class="it"><a href="https://www.tiktok.com/@js.sample/video/7000000000000000001"><img alt="my own video" src="https://p16-sign.tiktokcdn.com/own.jpg"></a></div></div></div></main>
+<script>
+fetch("/api/post/item_list/?secUid=x");     // own posts: must never be collected as favorites
+const FAV = [
+ {h:"kopi.tok", id:"7300000000000000001", desc:"Kopi art in 30s #kl", img:"https://p16-sign.tiktokcdn.com/f1.jpg"},
+ {h:"photo.mode", id:"7300000000000000002", desc:"Penang street food (photo post)", img:"https://p16-sign.tiktokcdn.com/f2.jpg", photo:true},
+ {h:"kopi.tok", id:"7300000000000000001", desc:"Kopi art in 30s #kl", img:"https://p16-sign.tiktokcdn.com/f1.jpg"},
+ {h:"dev.tok", id:"7300000000000000003", desc:"", img:"https://p16-sign.tiktokcdn.com/f3.jpg"},
+];
+let shown = 0, fetched = false, fav = false;
+function cell(p){ return `<div data-e2e="favorites-item" class="it"><a href="https://www.tiktok.com/@${p.h}/${p.photo?"photo":"video"}/${p.id}"><img alt="${p.desc}" src="${p.img}"></a><strong data-e2e="video-views">1.2K</strong></div>`; }
+function more(){ if (!fav) return; const l = document.querySelector('[data-e2e="favorites-item-list"]');
+  for (let i = 0; i < 2 && shown < FAV.length; i++) l.insertAdjacentHTML("beforeend", cell(FAV[shown++]));
+  if (shown >= FAV.length && !fetched) { fetched = true; fetch("/api/user/collect/item_list/?cursor=4"); } }
+document.querySelector('[data-e2e="favorites-tab"]').addEventListener("click", () => { fav = true;
+  document.getElementById("list").innerHTML = '<div data-e2e="favorites-item-list"></div>'; more(); });
+window.addEventListener("scroll", () => { if (window.innerHeight + window.scrollY > document.body.scrollHeight - 300) more(); });
+</script></body></html>

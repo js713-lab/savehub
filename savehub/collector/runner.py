@@ -53,6 +53,8 @@ def run_collect(platform: str, cfg: RunConfig, sink=None, sessions_dir=None, bro
     acct = "" if akey == sessions.DEFAULT_ACCOUNT else akey
     sfile = sessions.session_path(platform, sessions_dir, akey)
     if not sfile.exists(): raise NeedLogin(platform, sfile, "no saved session file", acct)
+    if cfg.unsave and not col.supports_unsave:
+        raise CollectorError(f"'{platform}' has no un-save action (its collector gathers {col.kind}); drop --unsave")
     if cfg.unsave and sink is None: raise CollectorError("--unsave needs a sink (it only un-saves items confirmed stored in SaveHub)")
     started = time.time(); collected_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     summary = {"platform": platform, "account": ("@" + acct) if acct else sessions.DEFAULT_ACCOUNT, "account_id": None,
@@ -92,7 +94,7 @@ def run_collect(platform: str, cfg: RunConfig, sink=None, sessions_dir=None, bro
                             for it, r in zip(items, results or [None] * len(items))]
         if cfg.unsave:
             summary["unsave"] = _unsave(col, page, [r for r in results if r.confirmed and not r.error], cfg, sfile)
-        sessions.save_state(ctx, sfile)                       # keep refreshed cookies for next run
+        sessions.save_state(ctx, sfile, col.needs_indexed_db)                       # keep refreshed cookies for next run
     summary["elapsed_s"] = round(time.time() - started, 1)
     ev("run.done", **{k: v for k, v in summary.items() if k not in ("items",)})
     return summary
@@ -147,6 +149,6 @@ def run_login(platform: str, sessions_dir=None, timeout_s: int = 600, wait_enter
         if not ok:
             raise NeedLogin(platform, sfile, "login not detected before timeout; nothing saved", akey)
         page.wait_for_timeout(3000)                            # let the app finish setting cookies
-        sessions.save_state(ctx, sfile)
+        sessions.save_state(ctx, sfile, col.needs_indexed_db)
     ev("login.saved", platform=platform, account=akey, session_file=str(sfile))
     return {"platform": platform, "account": akey if akey == sessions.DEFAULT_ACCOUNT else "@" + akey, **sessions.describe(sfile), "status": "logged_in"}

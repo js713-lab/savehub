@@ -39,7 +39,8 @@ async def stdio_test():
                 ("login_status", {"platform": "x"}),
                 ("login_status", {"platform": "x", "account": "@me"}),
                 ("collect", {"platform": "x"}),                       # no session -> need_login, returns immediately
-                ("collect", {"platform": "instagram", "account": "@me"}),   # stub collector -> not_implemented
+                ("collect", {"platform": "instagram", "account": "@me"}),   # implemented, no session -> need_login
+                ("collect", {"platform": "wechat"}),                         # stub collector -> not_implemented
             ]
             fails = []
             for name, args in calls:

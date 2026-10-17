@@ -1,0 +1,18 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>我的收藏 - 抖音</title><style>li{height:700px;list-style:none}</style></head><body>
+<!-- Synthetic douyin.com/user/self?showTab=favorite_collection (data-e2e attributes). Fictional. -->
+<header><div data-e2e="live-avatar"><img src="https://p3-pc.douyinpic.com/me.jpg"></div></header>
+<div data-e2e="user-info"><h1>Js Sample</h1></div>
+<div role="tablist"><span role="tab">作品</span><span role="tab" aria-selected="true">收藏</span></div>
+<ul data-e2e="user-post-list" id="l"></ul>
+<script>
+const V = [
+ {k:"video", id:"7400000000000000001", t:"成都火锅探店 🌶️", img:"https://p3-pc.douyinpic.com/v1.jpg"},
+ {k:"note", id:"7400000000000000002", t:"图文笔记：上海咖啡地图", img:"https://p3-pc.douyinpic.com/n2.jpg"},
+ {k:"video", id:"7400000000000000001", t:"成都火锅探店 🌶️", img:"https://p3-pc.douyinpic.com/v1.jpg"},
+];
+let i = 0, fetched = false;
+function more(){ const l = document.getElementById("l");
+  for (let n = 0; n < 2 && i < V.length; n++, i++) l.insertAdjacentHTML("beforeend", `<li><a href="/${V[i].k}/${V[i].id}"><img alt="${V[i].t}" src="${V[i].img}"><p>${V[i].t}</p></a></li>`);
+  if (i >= V.length && !fetched) { fetched = true; fetch("/aweme/v1/web/aweme/listcollection/?cursor=3&count=10&a_bogus=x", {method: "POST"}); } }
+more(); window.addEventListener("scroll", () => { if (window.innerHeight + window.scrollY > document.body.scrollHeight - 300) more(); });
+</script></body></html>

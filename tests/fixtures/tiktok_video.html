@@ -1,0 +1,8 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>TikTok video</title></head><body>
+<header><a data-e2e="nav-profile" href="/@js.sample"><span data-e2e="profile-icon"></span></a></header>
+<div class="actions"><button aria-pressed="false" aria-label="Like video"><span data-e2e="like-icon"></span></button>
+<button id="fav" aria-pressed="{{SAVED}}" aria-label="Favorites"><span data-e2e="undefined-icon"></span></button></div>
+<script>
+const b = document.getElementById("fav");
+b.addEventListener("click", () => { if (b.getAttribute("aria-pressed") === "true") { fetch("/__test/unsave?id={{ID}}"); setTimeout(() => b.setAttribute("aria-pressed", "false"), 200); } });
+</script></body></html>

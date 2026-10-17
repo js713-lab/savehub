@@ -1,0 +1,9 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Post • Instagram</title></head><body>
+<nav><a href="/"><svg aria-label="Home"></svg></a><div role="button"><svg aria-label="New post"></svg></div></nav>
+<main><article><a href="/{{CODE}}">.</a><section><div role="button" id="bm">{{ICON}}</div></section></article>
+<div class="more-posts"><div role="button"><svg aria-label="Save"></svg></div></div></main>
+<script>
+let saved = {{SAVED}};
+document.getElementById("bm").addEventListener("click", () => { if (saved) { saved = false; fetch("/__test/unsave?id={{CODE}}");
+  setTimeout(() => { document.getElementById("bm").innerHTML = '<svg aria-label="Save" width="24" height="24"><rect width="24" height="24"/></svg>'; }, 300); } });
+</script></body></html>

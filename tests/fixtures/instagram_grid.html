@@ -1,0 +1,12 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>{{TITLE}} • Instagram</title><style>.row{height:1100px;display:flex}</style></head><body>
+<!-- Synthetic saved grid (all-posts or a collection). Rows appended on scroll; after the last row the page fetches /api/v1/feed/saved/posts/ like IG does. -->
+<nav><a href="/"><svg aria-label="Home"></svg></a><div role="button"><svg aria-label="New post"></svg></div></nav>
+<main><div id="grid"></div></main>
+<script>
+const ROWS = {{ROWS}};
+let i = 0, fetched = false;
+function cell(p){ return `<a href="${p.href}" role="link"><div><img alt="${p.alt||""}" src="${p.src}"></div>${p.reel?'<svg aria-label="Clip"></svg>':""}${p.car?'<svg aria-label="Carousel"></svg>':""}</a>`; }
+function more(){ if (i < ROWS.length) document.getElementById("grid").insertAdjacentHTML("beforeend", `<div class="row">${ROWS[i++].map(cell).join("")}</div>`);
+  else if ({{FETCH}} && !fetched) { fetched = true; fetch("/api/v1/feed/saved/posts/?max_id=abc"); } }
+more(); window.addEventListener("scroll", () => { if (window.innerHeight + window.scrollY > document.body.scrollHeight - 200) more(); });
+</script></body></html>

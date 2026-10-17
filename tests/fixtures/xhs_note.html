@@ -1,0 +1,8 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>笔记 - 小红书</title></head><body>
+<div class="side-bar"><ul><li class="user side-bar-component"><a class="link-wrapper" href="/user/profile/5f0000000000000000000abc">我</a></li></ul></div>
+<div class="engage-bar"><span class="like-wrapper"><span class="count">12</span></span>
+<span class="collect-wrapper" id="c"><span class="reds-icon {{CLS}}"></span><span class="count">5</span></span></div>
+<script>
+const c = document.getElementById("c");
+c.addEventListener("click", () => { const i = c.querySelector(".reds-icon"); if (i.classList.contains("collected")) { fetch("/__test/unsave?id={{ID}}&tok={{TOK}}"); setTimeout(() => i.classList.remove("collected"), 200); } });
+</script></body></html>

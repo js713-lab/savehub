@@ -1,0 +1,8 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>抖音视频</title></head><body>
+<header><div data-e2e="live-avatar"></div></header>
+<div data-e2e="video-player-digg" data-e2e-state="video-player-no-digged">赞</div>
+<div id="c" data-e2e="video-player-collect" data-e2e-state="{{STATE}}">收藏</div>
+<script>
+const c = document.getElementById("c");
+c.addEventListener("click", () => { if (c.dataset.e2eState === "video-player-is-collected") { fetch("/__test/unsave?id={{ID}}"); setTimeout(() => c.setAttribute("data-e2e-state", "video-player-no-collect"), 200); } });
+</script></body></html>
