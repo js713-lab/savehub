@@ -65,6 +65,7 @@ How it works: one uvicorn process binds `0.0.0.0:$PORT`. `/mcp` goes to the MCP 
 | TikTok | Data export `user_data.json` (Favorite Videos + Like List) |
 | WeChat / 抖音 / 小红书 | No export of favourites — paste share text/links (share-text boilerplate stripped), or CSV / JSON / HTML link list |
 | Web | Add link, paste links, browser bookmarks HTML (Netscape format) |
+| iCloud | **On-box API collector** (pyicloud + your icloud4u-mcp, read-only): iCloud Drive file index with extracted text + Contacts. See [iCloud](#️-icloud-drive-files--contacts-local--self-hosted-only) |
 
 None of the non-X apps offer a public API for personal saved items. The server never scrapes them; the optional, **local-only** browser collector below can (X implemented, others stubbed).
 
@@ -87,6 +88,7 @@ None of the non-X apps offer a public API for personal saved items. The server n
 | `SAVEHUB_DASHBOARD_PASSWORD`, `SAVEHUB_DASHBOARD_USER` (savehub) | optional HTTP Basic auth for the dashboard + REST API (combined server); unset = no login |
 | `SAVEHUB_SEED` (1) | `0` = don't seed sample data on an empty DB |
 | `SAVEHUB_MCP_PORT` (8766) | port for the standalone MCP HTTP server only |
+| `SAVEHUB_ICLOUD_MAX_FOLDERS` (400), `SAVEHUB_ICLOUD_MAX_DEPTH` (12), `SAVEHUB_ICLOUD_EXTRACT_MAX_MB` (10), `SAVEHUB_ICLOUD_TEXT_CHARS` (8000), `SAVEHUB_ICLOUD_CONTACTS` (1), `SAVEHUB_ICLOUD_ROOT` (whole Drive), `ICLOUD_CHINA` (0) | iCloud collector limits: folders walked per run, depth, largest file whose text is extracted, text kept per file, collect Contacts, index only one Drive folder, use the China-mainland iCloud endpoints |
 
 Settings (including Notion token / X client secret) are stored in plain text in the local SQLite `settings` table — keep `data/` private.
 
@@ -101,7 +103,7 @@ Settings (including Notion token / X client secret) are stored in plain text in 
       "env": {
         "PYTHONPATH": "/workspace/savehub",
         "SAVEHUB_DB": "/workspace/savehub/data/savehub.db",
-        "SAVEHUB_ENABLED_PLATFORMS": "x,threads,instagram,facebook,messenger,whatsapp,wechat,tiktok,douyin,xiaohongshu,web"
+        "SAVEHUB_ENABLED_PLATFORMS": "x,threads,instagram,facebook,messenger,whatsapp,wechat,tiktok,douyin,xiaohongshu,icloud,web"
       }
     }
   }
@@ -122,6 +124,7 @@ Tools (17): `search_items, list_items, get_item, add_item, tag_items, get_summar
 .venv/bin/python tests/screenshots.py                # headless screenshots → screenshots/
 .venv/bin/python -m pytest -q tests/collector_test.py   # browser collector: X parser on HTML fixtures, scroll/de-dupe, login detection, push to a temp SaveHub, unsave safety
 .venv/bin/python -m pytest -q tests/backends_test.py          # library backends (twscrape, instaloader): mocked libraries, cookie conversion, fallback, no files left
+.venv/bin/python -m pytest -q tests/icloud_test.py        # iCloud: mocked pyicloud; Drive index + text (pdf/docx/txt, EN/中文 search), Contacts, incremental by modified date, expired/rejected -> needs login, multi-account, encrypted session round-trip, password never in MCP/REST/logs/env
 .venv/bin/python -m pytest -q tests/autosync_security_test.py   # auto-sync (incremental stop, backoff, needs-login, toggle, locks) + security (session perms/encryption, auth, CSRF, headers, log scrubbing)
 .venv/bin/python -m pytest -q -s tests/e2e_all_apps_test.py  # ONE end-to-end run of the whole wiring: real combined server (temp DB/key/token/password), all 9 collectors x 2 accounts
                                                               # through MCP collect (HTTP+bearer), REST Sync now and autosync --once; fake apps via Playwright routes
@@ -266,6 +269,41 @@ Install: `pip install -r requirements-collector.txt` (pinned). Without the libra
 `savehub/collector/platforms/<module>.py` (x, meta, bytedance, xiaohongshu, facebook, contacts), and `tests/fixtures/` mirrors the expected DOM/JSON. Automated use may hit
 rate limits, captchas or account checks. Keep runs small and infrequent, and use your own account only, at your own risk under the app's terms.
 
+## ☁️ iCloud (Drive files + Contacts, local / self-hosted only)
+Platform `icloud` (kind **files**, plus **contacts**). Read-only: SaveHub never deletes, moves, renames, uploads or un-saves
+anything on iCloud (there is no write call in `savehub/collector/platforms/icloud.py`, and a test checks for that). It uses
+**pyicloud 2026.10.1** for the Apple sign-in and API calls, and your **icloud4u-mcp** (`js713-lab/icloud4u-mcp`, MIT, pinned at
+commit `1fdc95a`) **as a library** for walking iCloud Drive (`DriveClient`) and extracting text (`extract_file`: pdf, docx,
+xlsx, txt/md/csv/json…). Its MCP server is not started. Install: `pip install -r requirements-collector.txt`.
+
+**1. Log in once, in a terminal on the box** (needs the vault key, see SECURITY.md):
+```bash
+.venv/bin/python -m savehub.collector login icloud --account @js     # any handle you like; one per Apple ID
+```
+It asks for:
+1. **Apple ID** (e-mail or phone; remembered for the next login of the same account),
+2. **password**, read with `getpass` (not echoed, never stored, never logged),
+3. the **6-digit 2FA code** that Apple pushes to your trusted devices (3 tries). Hardware security keys are not supported.
+
+Use your **normal Apple ID password**. Apple does **not** accept app-specific passwords for iCloud.com/iCloud Drive (they only work
+for mail, calendar and contacts apps over IMAP/CalDAV/CardDAV). Accounts with Advanced Data Protection must turn on "Access iCloud Data
+on the Web". After the code, SaveHub asks Apple to **trust this session**, drops the password and keeps only the trusted session
+cookies, **encrypted** in `data/sessions/icloud@<handle>.json`. Apple's trust lasts about 1–2 months. When it ends, or when Apple
+asks for 2FA again, the account shows **needs login** (`login_status`, `sync_status`, dashboard), and you run the same command again.
+More Apple IDs: run it again with another `--account`.
+
+**2. What is collected** (`collect icloud --account @js`, MCP `collect`, Sync now, or auto-sync):
+- **iCloud Drive files**: one item per file, with title = file name, `author` = `iCloud Drive/<folder>`, and a link
+  `https://www.icloud.com/iclouddrive/#doc=<docwsid>`. `extra` holds the path, folder, type/extension, size, modified date
+  and the Drive ids. Breadth-first walk, newest change first, capped by `SAVEHUB_ICLOUD_MAX_FOLDERS` / `_MAX_DEPTH`.
+- **Text** for small documents (≤ `SAVEHUB_ICLOUD_EXTRACT_MAX_MB`, pdf/docx/xlsx/text): the file is downloaded into the private temp
+  dir, its text is extracted and the download is deleted right away. The first `SAVEHUB_ICLOUD_TEXT_CHARS` characters are stored in
+  `content`, so full-text search works in English and 中文 (e.g. `季度报告`, `预算审批`).
+- **Contacts** (read-only GET): name, organisation, job title, phones and e-mails, with a link `https://www.icloud.com/contacts/#<id>`.
+  They are also mirrored into the Contacts page, `/api/contacts` and MCP `search_contacts`.
+- **Incremental by modified date**: `external_id` = `<docwsid>:<etag or modified time>`. Unchanged files are skipped. A changed file
+  (or contact) **updates** its stored item instead of making a duplicate. Removed files stay in SaveHub (nothing is deleted).
+
 ## 🔄 Auto-sync (near real-time, local / self-hosted only)
 The apps have no push API, so SaveHub polls instead: every N minutes (default **10**, min 2) each valid saved session on an
 implemented collector gets a small **incremental** collect. It stops paginating once it sees 3 already-stored items (saved lists
@@ -286,6 +324,7 @@ SAVEHUB_AUTOSYNC=1 python -m savehub.server          # or run the loop inside th
   and **Sync now** per account or for all (rate-limited, never un-saves).
 - MCP: `sync_status()` and `set_autosync(enabled: bool, interval_minutes: Optional[int] = None)`.
 - On Render (no browser) it stays off and reports `available: false`; it never crashes the server.
+- iCloud needs no browser: it syncs whenever pyicloud is installed, re-indexing only files whose modified date/etag changed.
 
 Security model (session files, encryption at rest, what MCP can and cannot do): see [SECURITY.md](SECURITY.md).
 

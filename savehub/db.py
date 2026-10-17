@@ -171,9 +171,11 @@ def mirror_collected_contact(d):
     ex = c.execute("SELECT id FROM contacts WHERE platform=? AND name=? AND (notes=? OR notes LIKE ?)",
                    (d["platform"], d["title"], url, url + "\n%")).fetchone()
     if ex: return ex["id"]
-    phones = [raw["phone"]] if raw.get("phone") else []
+    def _strs(v): return [str(x) for x in v if x] if isinstance(v, list) else []
+    phones = _strs(raw.get("phones")) or ([raw["phone"]] if raw.get("phone") else [])
+    emails, org = _strs(raw.get("emails")), str(raw.get("org") or "")      # iCloud Contacts carry these too
     cur = c.execute("INSERT INTO contacts(name,phones,emails,org,platform,account_id,notes,is_sample,source,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (d["title"], json.dumps(phones), "[]", "", d["platform"], d.get("account_id"), notes, 0, src, now_iso()))
+                    (d["title"], json.dumps(phones), json.dumps(emails), org, d["platform"], d.get("account_id"), notes, 0, src, now_iso()))
     c.commit(); return cur.lastrowid
 
 def update_item(item_id, d):

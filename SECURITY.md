@@ -8,6 +8,7 @@ nothing on a social app gets removed unless you explicitly ask for it.
 
 | What | Where | Protection |
 |---|---|---|
+| iCloud trusted session (pyicloud cookie jar + session tokens, per Apple ID) | `data/sessions/icloud@<handle>.json` | same as browser sessions, but **encryption is mandatory**: without the vault key, iCloud login and collect refuse to run |
 | Browser sessions (cookies + localStorage, per platform/account) | `data/sessions/<platform>@<handle>.json` on the box | dir `0700`, files `0600` (atomic writes under umask `077`), git-ignored (`data/*` + explicit rules), docker-ignored; **AES-256-GCM encrypted at rest when a vault key is set** |
 | Vault master key | `SAVEHUB_VAULT_KEY` env var, or `data/.vault_key` (`0600`, git-ignored; override path with `SAVEHUB_VAULT_KEY_FILE`) | never logged, printed, returned or put in a child's environment |
 | Account passwords (optional vault) | DB table `account_secrets` | AES-256-GCM, account id as AAD; only revealed to a logged-in dashboard user |
@@ -17,6 +18,31 @@ nothing on a social app gets removed unless you explicitly ask for it.
 
 No passwords for the social apps are ever stored by the collector: you log in yourself in a real browser window on the box
 (`python -m savehub.collector login <platform> --account @<handle>`); only the resulting session is kept.
+
+## iCloud (Apple ID)
+* **The Apple ID password never passes through SaveHub's MCP or REST API and is never stored.** No MCP tool or REST endpoint
+  takes a password (tests check every MCP and OpenAPI schema), and neither can log in. The only login is the on-box terminal command
+  `python -m savehub.collector login icloud --account @<handle>`. It refuses to run without a TTY, reads the password with `getpass`
+  (not echoed), and gives it only to pyicloud's SRP sign-in with Apple. It then drops it (`_password_raw = None`, and the local
+  reference goes out of scope). Error messages and logs are scrubbed of the password and the 2FA code. Env vars that look like
+  passwords (`ICLOUD_PASSWORD`, …) are never read, and they are stripped from collector children.
+* Apple does not accept **app-specific passwords** for the iCloud.com web sign-in that iCloud Drive and Contacts use, so the real
+  password plus 2FA is needed, but only at login. Afterwards SaveHub uses only the *trusted session* (trust token + cookies).
+* pyicloud insists on a cookie-jar file and a session file on disk. SaveHub gives it a **private temp dir**: `mkdtemp` under
+  `/dev/shm` (RAM) when that is writable, else the system temp dir, mode `0700`, files `0600` under umask `077`. The dir is seeded
+  from the decrypted session and read back after the run, then **deleted in `finally`**. Tests assert nothing is left behind. Only the
+  SaveHub session file persists, AES-256-GCM encrypted with the vault key and AAD `icloud@<handle>`.
+* The system keyring is disabled for pyicloud (`keyring.backends.null.Keyring`), and Apple's terms are **never auto-accepted**
+  (`accept_terms=False`; if Apple wants new terms, the login stops and tells you to accept them on icloud.com).
+* When Apple rejects a session, or asks for 2FA again, SaveHub marks the session as expired. `login_status`, `sync_status` and the
+  dashboard then show **needs login**, and auto-sync stops retrying until you log in again. The trust token is kept (encrypted), so
+  Apple may skip 2FA at the next login.
+* **Read-only**: only Drive listing/download and the Contacts GET are called. There are no delete/rename/move/upload/mkdir calls,
+  and a test greps the module for them. `collect(platform="icloud", unsave=true)` is refused. Downloads for text extraction are
+  size-capped (`SAVEHUB_ICLOUD_EXTRACT_MAX_MB`, default 10), go to the private temp dir and are deleted immediately. Nothing is cached.
+* Libraries: `pyicloud==2026.10.1` and `js713-lab/icloud4u-mcp` pinned to commit `1fdc95a`. Only its `DriveClient`, path helpers and
+  `extract_file` are imported. Its MCP server, `.env` loading, `ICLOUD_PASSWORD` support, `accept_terms=True` and download cache
+  are **not** used.
 
 ## Session encryption at rest
 * When a vault key is configured, every session write is encrypted with AES-256-GCM. The file key is derived from the master
@@ -73,7 +99,7 @@ group, are killed on timeout, and use fixed argv (no shell).
   `sync_status`); DNS-rebinding protection limits Host/Origin. stdio is local by nature.
 * MCP **can**: search/list/add items and accounts, import exports, read session *status* (`login_status`, `sync_status`), run
   collects (`collect`, needs an existing session and a browser on that server), turn auto-sync on/off and set its interval.
-* MCP **cannot**: log in, read or return cookies/session files/keys/passwords, un-save without an explicit `unsave=true`, make
+* MCP **cannot**: log in (for any platform, including iCloud: no tool takes an Apple ID password), read or return cookies/session files/keys/passwords, un-save without an explicit `unsave=true`, make
   auto-sync un-save, or read SaveHub's own secrets via `import_file` (session dir, DB, key/token files, hidden paths such as
   `~/.ssh` or `.git`, `/proc`, `/sys`, `/dev`, `/etc` and symlinks into them are refused; files capped at 50 MB).
 

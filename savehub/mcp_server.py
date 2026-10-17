@@ -210,7 +210,7 @@ async def collect(platform: str, account: Optional[str] = None, max_items: Optio
         return {"error": f"the '{platform}' collector is not implemented yet; only {[k for k, c in base.REGISTRY.items() if c.implemented]} can be collected. "
                          f"Use import_file with the app's data export instead.", "status": "not_implemented"}
     if max_items is not None and not (1 <= int(max_items) <= 2000): return {"error": "max_items must be between 1 and 2000"}
-    if unsave is True and not base.REGISTRY[platform].supports_unsave:
+    if unsave is True and not base.REGISTRY[platform].supports_unsave and not getattr(base.REGISTRY[platform], "uses_browser", True):   # read-only API collectors (iCloud): refuse up front
         return {"error": f"'{platform}' is read-only in SaveHub (its collector gathers {base.REGISTRY[platform].kind}); nothing can be un-saved or deleted there",
                 "status": "unsave_not_supported"}
     try: accts = _session_list(platform, account)

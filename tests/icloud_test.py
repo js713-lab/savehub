@@ -332,8 +332,9 @@ def test_collect_indexes_files_text_and_contacts(env, monkeypatch):
     # session refreshed + still encrypted; nothing left on disk
     assert sessions.is_encrypted(json.loads(sessions.session_path("icloud", env.sd, "me").read_text()))
     assert _leftovers() == before
-    if hasattr(db, "mirror_collected_contact"):                            # contacts mirrored into the contacts table
-        assert db.search_contacts("Aisyah")["total"] >= 1
+    ct = db.search_contacts("Aisyah", platform="icloud")["contacts"]       # contacts mirrored into the contacts table
+    assert len(ct) == 1 and ct[0]["org"] == "Kopi Sdn Bhd" and ct[0]["account_id"] == acc[0]["id"] and ct[0]["phones"] and ct[0]["emails"]
+    assert db.search_contacts("王", platform="icloud")["total"] >= 1
 
 
 def test_incremental_by_modified_date_updates_changed_files(env):
@@ -518,3 +519,17 @@ def test_real_pyicloud_reads_and_writes_our_seeded_files(env, monkeypatch):
         again = icloud.snapshot(d2, APPLE_ID, False, st["icloud"])
         assert again["icloud"]["session"]["session_token"] == "tok-123" and TOKEN in again["icloud"]["cookiejar"]
         assert api._password_raw is None
+
+
+def test_login_and_collect_refuse_without_vault_key(env, monkeypatch):
+    """The trusted session is never written in plaintext: no vault key -> login refuses before asking for the password."""
+    login(env.sd)                                                      # with a key: fine
+    monkeypatch.delenv("SAVEHUB_VAULT_KEY"); vault.set_runtime_key("")
+    asked = []
+    with pytest.raises(CollectorError, match="vault key"):
+        icloud.ICloudCollector().terminal_login(sessions.session_path("icloud", env.sd, "two"), "two", stdin=io.StringIO(APPLE_ID + "\n"),
+                                                stdout=io.StringIO(), ask_password=lambda p: asked.append(p) or PASSWORD, require_tty=False)
+    assert not asked and not sessions.session_path("icloud", env.sd, "two").exists()
+    with pytest.raises(CollectorError, match="vault key"):
+        icloud.ICloudCollector().collect_api({"cookies": [], "icloud": {"apple_id": APPLE_ID}}, RunConfig(), env.sd / "icloud@x.json", "x")
+    assert not (env.sd / "icloud@x.json").exists()

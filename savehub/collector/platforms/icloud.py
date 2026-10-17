@@ -361,6 +361,8 @@ class ICloudCollector(Collector):
         """-> (items, summary_extra). Writes the refreshed (or rejected) session back to sfile, encrypted."""
         lim = limits(); ic = session_info(state)
         if not ic: raise NeedLogin(PLATFORM, sfile, "the session file has no iCloud session (log in again)", acct)
+        if not sessions.encryption_enabled():                           # never write a refreshed trust token back in plaintext
+            raise CollectorError("iCloud sessions are only used with the vault key configured (SAVEHUB_VAULT_KEY or data/.vault_key)")
         info: dict = {"backend": "pyicloud"}
         with private_workdir() as d:
             try:
@@ -436,6 +438,9 @@ class ICloudCollector(Collector):
         if require_tty and not (hasattr(stdin, "isatty") and stdin.isatty()):
             raise CollectorError("iCloud login is interactive: run `python -m savehub.collector login icloud --account @<handle>` "
                                  "in a terminal on the box (it asks for your Apple ID, password and 2FA code)")
+        if not sessions.encryption_enabled():                           # an iCloud trust token is full iCloud access: never plaintext
+            raise CollectorError("iCloud login needs the SaveHub vault key so the trusted session is stored encrypted: set "
+                                 "SAVEHUB_VAULT_KEY or create the 0600 key file data/.vault_key (see SECURITY.md)")
         say = lambda s="": (stdout.write(s + "\n"), stdout.flush())
         def ask(prompt):
             stdout.write(prompt); stdout.flush()
@@ -486,8 +491,7 @@ class ICloudCollector(Collector):
             finally:
                 password = None                                            # noqa: F841 - drop our reference too
             sessions.write_state(sfile, state)
-        say(f"Signed in. {reach} Session saved encrypted as {Path(sfile).name}" if sessions.encryption_enabled()
-            else f"Signed in. {reach} Session saved as {Path(sfile).name} (0600; set a vault key to encrypt it)")
+        say(f"Signed in. {reach} Session saved encrypted as {Path(sfile).name}")
         return {"apple_id_saved": True, "drive_check": reach}
 
     @staticmethod
