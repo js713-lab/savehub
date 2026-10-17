@@ -1,11 +1,23 @@
 """End-to-end tests on an isolated temp DB (the live library is untouched)."""
 import os, json, tempfile, pathlib
-os.environ["SAVEHUB_DB"] = os.path.join(tempfile.mkdtemp(), "test.db")
+import pytest
+TEST_DB = pathlib.Path(tempfile.mkdtemp(prefix="savehub-test_all-")) / "test.db"
+os.environ["SAVEHUB_DB"] = str(TEST_DB)
 from fastapi.testclient import TestClient
-from savehub import app as appmod, seed
+from savehub import app as appmod, db, seed
 S = pathlib.Path(__file__).resolve().parent.parent / "samples"
 c = TestClient(appmod.app)
-seed.seed()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _own_db():
+    """This module's tests share one DB and run in order. Point savehub at it explicitly for the module's duration:
+    the env var above is ignored when another test module imported savehub.db first."""
+    old = db.DB_PATH
+    db.DB_PATH = TEST_DB
+    seed.seed()
+    yield
+    db.DB_PATH = old
 
 def imp(kind, fname, platform=""):
     with open(S / fname, "rb") as f:

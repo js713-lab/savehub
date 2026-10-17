@@ -36,6 +36,11 @@ def now_iso():
 
 def conn():
     c = getattr(_local, "c", None)
+    if c is not None and getattr(_local, "path", None) != str(DB_PATH):
+        # DB_PATH changed since this thread connected (tests, tooling): never keep writing to the previous file
+        try: c.close()
+        except Exception: pass
+        c = _local.c = None
     if c is None:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         old = os.umask(0o077)                    # a new DB (+ -wal/-shm) is created owner-only
@@ -45,6 +50,7 @@ def conn():
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA foreign_keys=ON")
         _local.c = c
+        _local.path = str(DB_PATH)
         init(c)
     return c
 

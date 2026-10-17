@@ -337,14 +337,26 @@ def x_sync():
     try: return xoauth.sync_bookmarks()
     except Exception as e: raise HTTPException(400, f"X sync failed: {e}")
 
+def login_required_headers(scope):
+    """Headers for the 401 login prompt. It is the first page anyone sees on the public URL and is sent before the
+    security middleware runs, so it carries the same hardening: CSP, security headers, no caching, HSTS behind HTTPS."""
+    hdrs = dict(scope.get("headers") or [])
+    out = [(b"www-authenticate", b'Basic realm="SaveHub"'), (b"content-type", b"text/plain; charset=utf-8"),
+           (b"cache-control", b"no-store"), (b"content-security-policy", CSP.encode())]
+    out += [(k.lower().encode(), v.encode()) for k, v in SEC_HEADERS.items()]
+    proto = (hdrs.get(b"x-forwarded-proto", b"").decode("latin-1") or scope.get("scheme") or "").split(",")[0].strip()
+    if proto in ("https", "wss"): out.append((b"strict-transport-security", b"max-age=31536000; includeSubDomains"))
+    return out
+
 def basic_auth_gate(inner):
     """ASGI wrapper: when a dashboard password is set, every request except /healthz needs HTTP Basic auth.
     Used by main() so `python -m savehub.app` enforces the login exactly like the combined server does."""
     async def gate(scope, receive, send):
-        if scope["type"] == "http" and auth.login_configured() and scope.get("path") != "/healthz":
+        if scope["type"] in ("http", "websocket") and auth.login_configured() and scope.get("path") != "/healthz":
             if not auth.basic_ok(dict(scope.get("headers") or []).get(b"authorization", b"")):
-                await send({"type": "http.response.start", "status": 401, "headers": [(b"www-authenticate", b'Basic realm="SaveHub"'), (b"content-type", b"text/plain"),
-                                                                                      (b"x-content-type-options", b"nosniff"), (b"x-frame-options", b"DENY")]})
+                if scope["type"] == "websocket":   # an HTTP response is not valid on a websocket scope
+                    await send({"type": "websocket.close", "code": 1008}); return
+                await send({"type": "http.response.start", "status": 401, "headers": login_required_headers(scope)})
                 await send({"type": "http.response.body", "body": b"login required"}); return
         await inner(scope, receive, send)
     return gate

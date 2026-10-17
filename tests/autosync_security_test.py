@@ -536,3 +536,35 @@ def test_mcp_token_file_private_and_not_printed(tdb, monkeypatch, capsys):
     t = m.mcp_token(); out = capsys.readouterr().out
     f = db.DB_PATH.parent / ".mcp_token"
     assert t and t not in out and _mode(f) == 0o600 and m.mcp_token() == t
+
+
+def test_login_prompt_carries_security_headers(tdb, monkeypatch):
+    """The 401 login page (first thing anyone sees on the public URL) gets CSP, no-store, the security headers and,
+    behind HTTPS, HSTS - in both the combined server and the standalone app."""
+    from fastapi.testclient import TestClient
+    from savehub import app as appmod, server as srv
+    monkeypatch.setenv("SAVEHUB_DASHBOARD_PASSWORD", DASH[1])
+    for asgi in (srv.app, appmod.basic_auth_gate(appmod.app)):
+        c = TestClient(asgi)
+        r = c.get("/", headers={"X-Forwarded-Proto": "https"})
+        assert r.status_code == 401 and r.headers["www-authenticate"] == 'Basic realm="SaveHub"'
+        assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+        assert r.headers["cache-control"] == "no-store" and r.headers["x-frame-options"] == "DENY"
+        assert r.headers["x-content-type-options"] == "nosniff" and r.headers["referrer-policy"] == "no-referrer"
+        assert r.headers["strict-transport-security"].startswith("max-age=")
+        assert "strict-transport-security" not in c.get("/").headers          # plain HTTP: no HSTS
+        assert c.get("/healthz").status_code == 200
+        assert c.get("/api/health", auth=DASH).status_code == 200
+
+
+def test_db_connection_follows_db_path_change(tmp_path, monkeypatch):
+    """A thread that already connected must not keep writing to the previous DB file after DB_PATH changes
+    (this is how a test run once wrote sample data into the real library)."""
+    a, b = tmp_path / "a.db", tmp_path / "b.db"
+    monkeypatch.setattr(db, "DB_PATH", a)
+    ca = db.conn()
+    monkeypatch.setattr(db, "DB_PATH", b)
+    cb = db.conn()
+    assert cb is not ca and db._local.path == str(b)
+    assert pathlib.Path(cb.execute("PRAGMA database_list").fetchone()[2]) == b
+    cb.close(); db._local.c = None

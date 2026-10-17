@@ -55,8 +55,9 @@ async def app(scope, receive, send):
     if scope["type"] in ("http", "websocket"):
         path = scope.get("path", "")
         if auth.login_configured() and path != "/healthz" and not (path == "/mcp" or path.startswith("/mcp/")) and not _basic_ok(scope):
-            await send({"type": "http.response.start", "status": 401, "headers": [(b"www-authenticate", b'Basic realm="SaveHub"'), (b"content-type", b"text/plain"),
-                                                                                  (b"x-content-type-options", b"nosniff"), (b"x-frame-options", b"DENY")]})
+            if scope["type"] == "websocket":   # an HTTP response is not valid on a websocket scope: refuse the handshake
+                await send({"type": "websocket.close", "code": 1008}); return
+            await send({"type": "http.response.start", "status": 401, "headers": webapp.login_required_headers(scope)})
             await send({"type": "http.response.body", "body": b"login required"}); return
         if path == "/mcp" or path.startswith("/mcp/"):
             if path != "/mcp":
