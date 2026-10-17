@@ -4,7 +4,7 @@ streamable HTTP:  python -m savehub.mcp_server --http --port 8766   (endpoint /m
 Browser collector: login_status / collect (subprocess, SQLite sink; sessions per platform+account; SAVEHUB_COLLECT_TIMEOUT).
 Config/auth: SAVEHUB_ENABLED_PLATFORMS=x,instagram,xiaohongshu (limits what tools can read/write), SAVEHUB_DB=path.
 """
-import argparse, asyncio, base64, hmac, importlib.util, json, os, signal, stat, sys
+import argparse, asyncio, base64, hmac, importlib.util, json, os, signal, stat, sys, time
 from pathlib import Path
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
@@ -153,7 +153,8 @@ def login_status(platform: str, account: Optional[str] = None) -> dict:
     if not base.REGISTRY[platform].implemented:
         r["note"] = f"the '{platform}' collector is not implemented yet (only {[k for k, c in base.REGISTRY.items() if c.implemented]})"
     if not ok:
-        how = ("in a terminal on the box; it asks for the Apple ID, password and 2FA code, and keeps only the trusted session"
+        how = ("in a terminal on the box (or open a login window on the box desktop: python -m savehub.collector login-terminal "
+               f"{platform} --account @<handle> --display :N); it asks for the Apple ID, password and 2FA code, and keeps only the trusted session"
                if getattr(cls, "login_mode", "browser") == "terminal" else "on the box (needs a desktop/display)")
         r["fix"] = (f"No valid saved session for {platform}" + (f" account {account}" if account else "") +
                     f". Log in {how}: {_login_cmd(platform, account or '')}")
@@ -196,6 +197,16 @@ async def _run_collect_proc(cmd: list, timeout: int) -> dict:
     res["exit_code"] = proc.returncode
     return res
 
+def _sync_state(what: str, platform: str, account: str, **kw) -> None:
+    """Keep the per-account auto-sync state (sync_status / dashboard) in step with MCP `collect` runs. Never raises."""
+    try:
+        from .collector import autosync
+        if what == "start": autosync.mark_external_start(platform, account, "mcp")
+        elif what == "record": autosync.record_external(platform, account, kw.get("res") or {}, kw.get("started"), "mcp")
+        elif what == "needs_login": autosync.record_needs_login(platform, account, "saved session expired: log in again on the box", "mcp")
+    except Exception as e:                        # pragma: no cover - state bookkeeping must not break a collection
+        print(f"[savehub] sync-state update failed: {type(e).__name__}", file=sys.stderr)
+
 @mcp.tool()
 async def collect(platform: str, account: Optional[str] = None, max_items: Optional[int] = None, unsave: bool = False) -> dict:
     """Run the collector for a platform and store new saves in SaveHub, tagged with the account they came from
@@ -216,6 +227,8 @@ async def collect(platform: str, account: Optional[str] = None, max_items: Optio
     try: accts = _session_list(platform, account)
     except ValueError as e: return {"error": str(e)}
     ready = [a for a in accts if a["logged_in"]]
+    for a in accts:                               # expired sessions -> needs_login in the shared sync state (dashboard / sync_status)
+        if a.get("session") == "expired": _sync_state("needs_login", platform, a["account"])
     if not ready:
         return {"status": "need_login", "platform": platform, "accounts": accts,
                 "error": f"No valid saved session for {platform}" + (f" account {account}" if account else "") +
@@ -226,6 +239,9 @@ async def collect(platform: str, account: Optional[str] = None, max_items: Optio
                 "platform": platform, "error": "Cannot collect on this server: " + rt["reason"]}
     runs, unsave = [], unsave is True
     rt_mod = _rt()
+    if unsave and not base.REGISTRY[platform].supports_unsave:   # usage error, not an account problem: no run, no sync-state change
+        err = f"'{platform}' has no un-save action (its collector gathers {base.REGISTRY[platform].kind}); call collect without unsave"
+        ready, runs = [], [{"account": a["account"], "status": "CollectorError", "error": err, "unsave_mode": "refused"} for a in ready]
     for a in ready:
         key = sessions.account_key(a["account"])
         lock = (platform, key)
@@ -234,9 +250,13 @@ async def collect(platform: str, account: Optional[str] = None, max_items: Optio
             if not busy: rt_mod.RUNNING.add(lock)
         if busy:
             runs.append({"account": a["account"], "status": "busy", "error": "a collection for this account is already running"}); continue
+        started = time.time()
+        _sync_state("start", platform, key)
+        res = {"status": "error", "error": "collection failed to start"}
         try: res = await _run_collect_proc(_collect_cmd(platform, key, max_items, unsave), COLLECT_TIMEOUT_S)
         finally:
             with rt_mod.RUNNING_LOCK: rt_mod.RUNNING.discard(lock)
+            _sync_state("record", platform, key, res=res, started=started)
         res.pop("session_file", None)
         if isinstance(res.get("items"), list): res["items"] = res["items"][:25]
         res.setdefault("account", a["account"])

@@ -474,7 +474,11 @@ def test_04_autosync_once(e2e):
     out = e2e.autosync_once()
     assert out["status"] == "ok" and out["unsave"] == "never"
     runs = {(r["platform"], r["account"]): r for r in out["runs"]}
-    assert runs[("x", "old")]["status"] == "needs_login" and runs[("x", "c")]["status"] == "needs_login", runs
+    # x@old (expired cookies) and x@c (login wall) were already marked needs_login by the MCP collect in test_03, so auto-sync
+    # does not even try them (before the fix, MCP runs left sync_state untouched and auto-sync had to find out again)
+    for a in ("old", "c"):
+        st = e2e.state("x", a)
+        assert ("x", a) not in runs and st["status"] == "needs_login" and st["last_reason"] == "mcp", (runs.get(("x", a)), st)
     for p in PLATFORMS:
         ra, rb = runs.get((p, "a"), {}), runs.get((p, "b"), {})
         row = e2e.account_row(p, "a")

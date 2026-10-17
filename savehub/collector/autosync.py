@@ -366,6 +366,41 @@ def run_loop(stop: threading.Event, engine: Optional[Engine] = None, where: str 
         ev("autosync.stop", where=where)
 
 
+
+# ---------------------------------------------------------------- runs started outside the Engine (MCP `collect`)
+def mark_external_start(platform: str, account: str, reason: str = "mcp") -> None:
+    """A collect started elsewhere (MCP `collect`) is now running for this account: show it as "syncing"."""
+    _update_state(platform, sessions.account_key(account), running=1, last_run=time.time(), last_reason=reason)
+
+
+def record_external(platform: str, account: str, res: dict, started: Optional[float] = None, reason: str = "mcp",
+                    sessions_dir=None) -> dict:
+    """Record the outcome of a collect that did not go through the Engine (MCP `collect`) in the same per-account
+    sync_state the auto-sync loop and the dashboard use: ok -> synced (counts, next run pushed out by one interval),
+    need_login -> needs_login (not retried until the session file changes), errors -> error + backoff, etc."""
+    account = sessions.account_key(account)
+    started = started or time.time()
+    eng = Engine(sessions_dir=sessions_dir)
+    try: iv = eng.interval()
+    except Exception: iv = DEFAULT_INTERVAL
+    try: mt = sessions.session_path(platform, sessions_dir, account).stat().st_mtime
+    except OSError: mt = None
+    out = eng._record(platform, account, dict(res or {}), started, iv, mt, reason)
+    _update_state(platform, account, running=0, last_run=started, last_reason=reason)
+    return out
+
+
+def record_needs_login(platform: str, account: str, detail: str = "session expired: log in again on the box",
+                       reason: str = "mcp", sessions_dir=None) -> None:
+    """An account whose saved session is already expired / rejected (found by MCP `collect` / login checks)."""
+    account = sessions.account_key(account)
+    try: mt = sessions.session_path(platform, sessions_dir, account).stat().st_mtime
+    except OSError: mt = None
+    _update_state(platform, account, status="needs_login", running=0, last_run=time.time(), next_run=None, session_mtime=mt,
+                  last_added=0, last_error=scrub(detail)[:300], last_reason=reason)
+    ev("autosync.needs_login", logging.WARNING, platform=platform, account=account, reason=reason)
+
+
 _BG: dict = {}
 
 

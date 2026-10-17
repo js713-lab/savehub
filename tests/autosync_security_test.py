@@ -468,6 +468,57 @@ def test_mcp_tools_auth_and_validation(tdb, monkeypatch):
     assert autosync.get_config()["enabled"] is False
 
 
+def test_mcp_collect_updates_sync_state(tdb, monkeypatch):
+    """MCP `collect` runs are recorded in the shared per-account sync state (was: sync_status stayed 'pending' and a
+    need_login found via MCP was only noticed by the next auto-sync run)."""
+    from savehub import mcp_server as m
+    sessions.write_state(tdb / "x@alice.json", _sess_doc())
+    sessions.write_state(tdb / "x@bob.json", _sess_doc(expires=time.time() - 3600))       # expired cookies
+    monkeypatch.setattr(runtime, "runtime_for", lambda p: {"available": True})
+    seen, results = {}, []
+
+    async def fake_proc(cmd, timeout):
+        acct = cmd[cmd.index("--account") + 1] if "--account" in cmd else "default"
+        seen[acct] = {a["account"]: a["state"] for a in m.sync_status()["accounts"]}["@" + acct]   # state while running
+        return results.pop(0)
+
+    monkeypatch.setattr(m, "_run_collect_proc", fake_proc)
+    state = lambda: {a["account"]: a for a in m.sync_status()["accounts"]}
+    m.set_autosync(True, 10)
+    assert state()["@alice"]["state"] == "pending"
+    results[:] = [{"status": "ok", "exit_code": EXIT_OK, "collected": 5, "created": 2}]
+    r = arun(m.collect("x"))
+    assert r["status"] == "ok" and r["created"] == 2 and r["skipped_accounts"] == ["@bob"]
+    assert seen["alice"] == "syncing"
+    st = state()
+    assert st["@alice"]["state"] == "synced" and st["@alice"]["items_added_last_run"] == 2 and st["@alice"]["items_added_total"] == 2
+    assert st["@alice"]["last_success"] and st["@alice"]["next_run"]
+    assert st["@bob"]["state"] == "needs_login" and "login" in st["@bob"]["fix"]
+    assert autosync.get_state("x", "bob")["status"] == "needs_login" and autosync.get_state("x", "bob")["last_reason"] == "mcp"
+    # the app asked for a login during an MCP run -> needs_login right away, and auto-sync will not retry it
+    results[:] = [{"status": "need_login", "exit_code": EXIT_NEED_LOGIN, "detail": "login wall"}]
+    arun(m.collect("x", account="@alice"))
+    st = state(); assert st["@alice"]["state"] == "needs_login" and st["@alice"]["items_added_total"] == 2
+    assert ("x", "alice") not in autosync.Engine(sessions_dir=tdb).due(force=True)
+    # a fresh login (new session file) makes it due again; errors are recorded with backoff, never with secrets
+    time.sleep(0.05); sessions.write_state(tdb / "x@alice.json", _sess_doc())
+    assert ("x", "alice") in autosync.Engine(sessions_dir=tdb).due(force=True)
+    results[:] = [{"status": "error", "exit_code": 1, "error": f"boom auth_token={COOKIE}"}]
+    arun(m.collect("x", account="@alice"))
+    st = state(); assert st["@alice"]["state"] == "error" and st["@alice"]["consecutive_errors"] == 1 and COOKIE not in json.dumps(st)
+    assert not autosync.get_state("x", "alice")["running"]
+    # unsave=true on a collector without an un-save action: refused without a run and without touching the sync state
+    sessions.write_state(tdb / "messenger@alice.json", _sess_doc())
+    before = autosync.get_state("messenger", "alice")
+    r = arun(m.collect("messenger", account="@alice", unsave=True))
+    assert r["runs"][0]["status"] != "ok" and "no un-save action" in r["runs"][0]["error"] and autosync.get_state("messenger", "alice") == before
+    # a crash in the run itself still clears the "syncing" flag
+    async def broken(cmd, timeout): raise RuntimeError("spawn failed")
+    monkeypatch.setattr(m, "_run_collect_proc", broken)
+    with pytest.raises(RuntimeError): arun(m.collect("x", account="@alice"))
+    assert not autosync.get_state("x", "alice")["running"] and state()["@alice"]["state"] == "error"
+
+
 def test_mcp_import_file_path_guard(tdb, tmp_path):
     from savehub import mcp_server as m
     sessions.write_state(tdb / "x@alice.json", _sess_doc())
