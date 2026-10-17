@@ -59,17 +59,28 @@ BACKENDS: dict[str, list[BackendInfo]] = {
 # auto where the library is clearly better; Instagram stays on the browser unless you pick auto/instaloader (see README)
 DEFAULTS: dict[str, str] = {"x": AUTO, "instagram": PLAYWRIGHT}
 
+# API collectors: the client library IS the collector (no browser path, nothing to choose, read-only). Shown for status only.
+NATIVE: dict[str, list[BackendInfo]] = {
+    "icloud": [BackendInfo("pyicloud", "icloud", "-", "pyicloud", "pyicloud", "2026.10.1", "MIT", "https://github.com/timlaing/pyicloud",
+                           "iCloud web API client (Apple ID SRP sign-in + 2FA, trusted session reuse); Drive + Contacts read calls only"),
+               BackendInfo("icloud-docs-mcp", "icloud", "-", "icloud-docs-mcp", "icloud_docs_mcp", "git 1fdc95a", "MIT",
+                           "https://github.com/js713-lab/icloud4u-mcp",
+                           "your icloud4u-mcp, used as a library: Drive walking (DriveClient) + text extraction (pdf/docx/xlsx/txt)")],
+}
+
 
 def libraries(platform: str) -> list[BackendInfo]:
     return list(BACKENDS.get(platform, []))
 
 
 def options(platform: str) -> list[str]:
+    if platform in NATIVE: return [NATIVE[platform][0].name]
     libs = [b.name for b in libraries(platform)]
     return [AUTO, PLAYWRIGHT, *libs] if libs else [PLAYWRIGHT]
 
 
 def default_choice(platform: str) -> str:
+    if platform in NATIVE: return NATIVE[platform][0].name
     return DEFAULTS.get(platform, AUTO if libraries(platform) else PLAYWRIGHT)
 
 
@@ -138,13 +149,15 @@ def describe(platform: str, read_db: bool = True) -> dict:
     """Public status for list_platforms / login_status / dashboard (no secrets)."""
     choice = get_choice(platform, read_db)
     libs = [{"name": b.name, "library": b.dist, "pinned": b.pin, "installed": installed(b), "version": version(b),
-             "license": b.license, "repo": b.repo, "note": b.note} for b in libraries(platform)]
+             "license": b.license, "repo": b.repo, "note": b.note} for b in (NATIVE.get(platform) or libraries(platform))]
     return {"backend": choice, "default": default_choice(platform), "options": options(platform),
-            "effective": plan(platform, choice), "libraries": libs, "unsave_backend": PLAYWRIGHT}
+            "effective": plan(platform, choice), "libraries": libs,
+            "unsave_backend": None if platform in NATIVE else PLAYWRIGHT, **({"native": True, "read_only": True} if platform in NATIVE else {})}
 
 
 def plan(platform: str, choice: str) -> list[str]:
     """Order in which backends are tried for this choice. 'playwright' is always last for auto."""
+    if platform in NATIVE: return [NATIVE[platform][0].name]
     libs = libraries(platform)
     if not libs or choice == PLAYWRIGHT: return [PLAYWRIGHT]
     if choice == AUTO: return [b.name for b in libs if installed(b)] + [PLAYWRIGHT]

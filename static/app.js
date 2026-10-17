@@ -9,7 +9,7 @@ const toast = (m, o = {}) => {
   requestAnimationFrame(() => t.classList.add('show'));
   t._h = setTimeout(() => t.classList.remove('show'), o.action ? 6000 : 3500);
 };
-const COLORS = {x:'#111',threads:'#333',instagram:'#d62976',facebook:'#0866ff',messenger:'#0084ff',whatsapp:'#25d366',wechat:'#07c160',tiktok:'#ff0050',douyin:'#161823',xiaohongshu:'#ff2442',web:'#6b7280'};
+const COLORS = {x:'#111',threads:'#333',instagram:'#d62976',facebook:'#0866ff',messenger:'#0084ff',whatsapp:'#25d366',wechat:'#07c160',tiktok:'#ff0050',douyin:'#161823',xiaohongshu:'#ff2442',icloud:'#3693f3',web:'#6b7280'};
 let PLATFORMS = [], ACCOUNTS = [], VAULT = {enabled: false};
 const pname = id => (PLATFORMS.find(p => p.id === id) || {}).name || id;
 // Platform badge: real brand logo (static/logos/<id>.svg, from Simple Icons) on the brand colour + the platform name.
@@ -160,10 +160,12 @@ const PMETA = {
   tiktok:      {mark: 'TT', bg: '#010101', at: true, ph: 'username', fx: 'tt'},
   douyin:      {mark: '抖', bg: '#161823', pre: 'ID', ph: '抖音号', label: 'Douyin ID 抖音号', fx: 'tt'},
   xiaohongshu: {mark: '红', bg: '#ff2442', pre: 'ID', ph: '小红书号', label: 'RED ID 小红书号'},
+  icloud:      {mark: 'iC', bg: '#3693f3', at: true, ph: 'appleid-name', label: 'Apple ID name',
+                hint: 'A short name for this Apple ID (letters, digits . _ -), e.g. js.yip for js.yip@icloud.com. Then log in once in a terminal on the box: python -m savehub.collector login icloud --account @js.yip (Apple ID, password, 2FA code; the password is never stored)'},
   web:         {mark: 'www', bg: '#6b7280', ph: 'username', label: 'Username'},
 };
 const pm = id => PMETA[id] || {mark: String(id || '?').slice(0, 2).toUpperCase(), bg: '#555', ph: 'username'};
-const LOGOS = new Set(['x', 'threads', 'instagram', 'facebook', 'messenger', 'whatsapp', 'wechat', 'tiktok', 'douyin', 'xiaohongshu', 'web']);
+const LOGOS = new Set(['x', 'threads', 'instagram', 'facebook', 'messenger', 'whatsapp', 'wechat', 'tiktok', 'douyin', 'xiaohongshu', 'icloud', 'web']);
 const logoImg = id => `<img class="plogo" src="/static/logos/${id}.svg" alt="" width="24" height="24" decoding="async" draggable="false">`;
 // Brand mark: white brand logo on the platform colour (falls back to the letter mark for unknown platforms).
 const pmark = (id, size = '') => LOGOS.has(id)
@@ -278,6 +280,7 @@ function syncStrip() {
 const BK_LABEL = {auto: 'Auto', playwright: 'Browser'};
 function backendPick(p) {
   const b = SYNC && SYNC.backends && SYNC.backends[p];
+  if (b && b.native) return `<span class="bkpick muted" title="${esc((b.libraries || []).map(l => `${l.name} ${l.version || '(not installed)'} · ${l.license} · ${l.note}`).join('\n'))}">Collector: ${esc(b.backend)} · read-only</span>`;
   if (!b || !b.options || b.options.length < 2) return '';
   const libs = Object.fromEntries((b.libraries || []).map(l => [l.name, l]));
   const tip = `Collector backend. Auto: ${(b.libraries || []).map(l => l.name).join(', ')} first, browser if it fails. Browser: Playwright scraper (the only one that can un-save).` +
@@ -377,8 +380,8 @@ function renderAccounts() {
     .map(([v, l, n]) => `<button class="${A.status === v ? 'on' : ''}" data-s="${v}" aria-pressed="${A.status === v}">${v ? `<i class="sdot s-${v}"></i>` : ''}${l}<span class="n">${n}</span></button>`).join('');
   const el = $('#alist');
   if (!all.length && !A.q) {
-    el.innerHTML = `<div class="empty"><div class="empty-marks">${['instagram', 'x', 'tiktok', 'xiaohongshu', 'whatsapp', 'wechat', 'facebook', 'douyin'].map(p => pmark(p, 'lg')).join('')}</div>
-      <h3>Bring all your accounts together</h3><p class="muted">Add every X, Threads, Instagram, Facebook, Messenger, WhatsApp, WeChat, TikTok, 抖音 and 小红书 account you own — then link saved items and contacts to them.</p>
+    el.innerHTML = `<div class="empty"><div class="empty-marks">${['instagram', 'x', 'tiktok', 'xiaohongshu', 'whatsapp', 'wechat', 'facebook', 'douyin', 'icloud'].map(p => pmark(p, 'lg')).join('')}</div>
+      <h3>Bring all your accounts together</h3><p class="muted">Add every X, Threads, Instagram, Facebook, Messenger, WhatsApp, WeChat, TikTok, 抖音, 小红书 and iCloud account you own — then link saved items and contacts to them.</p>
       <div class="row center"><button class="btn big" onclick="openAddAccount()">${IC.plus} Add your first account</button><button class="btn ghost" onclick="openAddAccount('', 'paste')">Paste a list of handles</button></div></div>`;
     return;
   }
@@ -651,7 +654,7 @@ function renderPaste(platHead) {
       <label class="full" for="bt"><span class="lbl">Tags for all <span class="opt">optional</span></span><input id="bt" placeholder="personal, work" autocomplete="off"></label>
       <label class="full" for="btext"><span class="lbl">One account per line</span>
         <textarea id="btext" rows="7" spellcheck="false" placeholder="@jsyip\n@jsyip.food, Js Eats\ninstagram @js.travel Travel\nxhs js_red_id\nhttps://www.tiktok.com/@jsyip" aria-describedby="bhelp"></textarea>
-        <span class="hint" id="bhelp">Formats: <code>@handle</code> · <code>handle, Display name</code> · <code>ig @handle</code> (prefix: x, threads, ig, fb, messenger, wa, wechat/微信, tiktok, douyin/抖音, xhs/小红书) · profile links. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to add.</span></label>
+        <span class="hint" id="bhelp">Formats: <code>@handle</code> · <code>handle, Display name</code> · <code>ig @handle</code> (prefix: x, threads, ig, fb, messenger, wa, wechat/微信, tiktok, douyin/抖音, xhs/小红书, icloud) · profile links. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to add.</span></label>
     </div>
     <div id="bprev" class="bprev" aria-live="polite"></div>
     <div id="amAdded" class="added" aria-live="polite"></div>
@@ -720,11 +723,12 @@ async function viewConnect(params) {
   $('#view').innerHTML = `<h2>Connect apps</h2>
   <p class="muted">Choose which apps SaveHub collects from (toggle). Honest status: only <span class="method live_api">LIVE API</span> X has an official bookmarks API. Every other app has <b>no public API for your saved/favourite items</b>, so SaveHub imports their <b>official data-export files</b> or links you paste.</p>
   <div class="grid">${PLATFORMS.map(p => `<div class="card">
-    <div class="row">${pbadge(p.id)}<span class="method ${p.method}">${p.method === 'live_api' ? 'LIVE API' : 'IMPORT'}</span><span style="flex:1"></span>
+    <div class="row">${pbadge(p.id)}<span class="method ${p.method}">${p.method === 'live_api' ? 'LIVE API' : p.method === 'collector' ? 'ON-BOX COLLECTOR' : 'IMPORT'}</span><span style="flex:1"></span>
       <label class="small row"><input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="togglePlatform('${p.id}', this.checked)"> enabled</label></div>
     <div class="small">${esc(p.detail)}</div><div class="muted small">${p.count} items in library</div>
     ${p.id === 'x' ? `<div class="small">Client ID: ${st.x.client_id_set ? '✔ set' : '✖ not set (Settings)'} · ${st.x.connected ? '✔ connected as @' + esc(st.x.user?.username || '') : 'not connected'}</div>
       <div class="row"><a class="btn small" href="/api/x/auth">Connect X (OAuth 2.0 PKCE)</a><button class="btn ghost small" onclick="xSync()">Sync bookmarks</button></div>`
+    : p.method === 'collector' ? `<div class="small">Log in once in a terminal on the box (asks for the Apple ID, password and 2FA code; only the trusted session is kept, encrypted):<br><code>python -m savehub.collector login ${esc(p.id)} --account @&lt;handle&gt;</code><br>Then auto-sync (Accounts page) indexes new and changed files. Read-only: nothing on iCloud is ever deleted.</div>`
     : `<div class="row"><button class="btn small" onclick="importModal('${p.id}')">Import…</button></div>`}
   </div>`).join('')}</div>
   <div class="panel" style="margin-top:16px"><h4>Quick paste links (any app — 小红书 / 抖音 / 微信 share text works)</h4>

@@ -104,7 +104,7 @@ def page_for(browser, fake):
 
 # ---------------------------------------------------------------- registry / stubs / config
 def test_registry_and_stubs():
-    expected = {"x", "instagram", "threads", "facebook", "tiktok", "douyin", "xiaohongshu", "wechat", "whatsapp", "messenger"}
+    expected = {"x", "instagram", "threads", "facebook", "tiktok", "douyin", "xiaohongshu", "wechat", "whatsapp", "messenger", "icloud"}
     assert set(REGISTRY) == expected
     impl = {p["platform"]: p["implemented"] for p in list_platforms()}
     implemented = {k for k, v in impl.items() if v}

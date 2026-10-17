@@ -20,6 +20,9 @@ ENV_ALLOW = {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TZ
              "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS",
              "PLAYWRIGHT_BROWSERS_PATH", "SAVEHUB_CHROME", "SAVEHUB_LOG_LEVEL", "SAVEHUB_SESSIONS_DIR", "SAVEHUB_ENABLED_PLATFORMS",
              "VIRTUAL_ENV", "PYTHONPATH", "PYTHONIOENCODING", "SSL_CERT_FILE", "SSL_CERT_DIR",
+             # iCloud collector limits (non-secret); the Apple ID password is never in any environment
+             "SAVEHUB_ICLOUD_ROOT", "SAVEHUB_ICLOUD_CONTACTS", "SAVEHUB_ICLOUD_MAX_FOLDERS", "SAVEHUB_ICLOUD_MAX_DEPTH",
+             "SAVEHUB_ICLOUD_EXTRACT_MAX_MB", "SAVEHUB_ICLOUD_TEXT_CHARS", "ICLOUD_CHINA",
              "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
              "SYSTEMROOT", "COMSPEC", "PATHEXT", "LOCALAPPDATA", "APPDATA", "USERPROFILE", "WINDIR"}
 
@@ -56,6 +59,22 @@ def collector_runtime() -> dict:
     for c in SYSTEM_CHROMES:
         if shutil.which(c) or os.path.exists(c): return {"available": True, "browser": c}
     return {"available": False, "reason": "No Chromium found on this server (run: playwright install chromium)." + where}
+
+
+# API collectors (no browser): platform -> import names they need
+API_COLLECTOR_LIBS = {"icloud": ("pyicloud", "icloud_docs_mcp")}
+
+
+def runtime_for(platform: str) -> dict:
+    """Like collector_runtime(), but per platform: API collectors (iCloud) need their libraries, not a browser."""
+    libs = API_COLLECTOR_LIBS.get(platform)
+    if not libs: return collector_runtime()
+    if os.environ.get("SAVEHUB_COLLECTOR", "").lower() in ("0", "off", "false", "disabled"):
+        return {"available": False, "reason": "collector disabled on this server (SAVEHUB_COLLECTOR=off)."}
+    missing = [m for m in libs if importlib.util.find_spec(m) is None]
+    if missing:
+        return {"available": False, "reason": f"{platform} collector needs {', '.join(missing)} (pip install -r requirements-collector.txt)."}
+    return {"available": True, "browser": None, "api": platform}
 
 
 try:

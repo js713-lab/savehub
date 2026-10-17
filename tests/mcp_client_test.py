@@ -12,7 +12,7 @@ def out(r):
 
 async def stdio_test():
     env = {**os.environ, "SAVEHUB_DB": os.path.join(tempfile.mkdtemp(), "mcp.db"), "SAVEHUB_SESSIONS_DIR": tempfile.mkdtemp(),
-           "SAVEHUB_ENABLED_PLATFORMS": "x,instagram,xiaohongshu,douyin,tiktok,wechat,whatsapp,web"}
+           "SAVEHUB_ENABLED_PLATFORMS": "x,instagram,xiaohongshu,douyin,tiktok,wechat,whatsapp,icloud,web"}
     params = StdioServerParameters(command=sys.executable, args=["-m", "savehub.mcp_server"], env=env, cwd=str(ROOT))
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as s:
@@ -41,6 +41,8 @@ async def stdio_test():
                 ("collect", {"platform": "x"}),                       # no session -> need_login, returns immediately
                 ("collect", {"platform": "instagram", "account": "@me"}),   # implemented, no session -> need_login
                 ("collect", {"platform": "wechat"}),                         # stub collector -> not_implemented
+                ("login_status", {"platform": "icloud", "account": "@me"}),  # on-box terminal login, no session yet
+                ("collect", {"platform": "icloud", "account": "@me"}),       # API collector, no session -> need_login
             ]
             fails = []
             for name, args in calls:
@@ -51,6 +53,7 @@ async def stdio_test():
                 elif name == "login_status":
                     brief = res
                     if res.get("logged_in") is not False or "fix" not in res: fails.append(name)
+                    if args.get("platform") == "icloud" and ("savehub.collector login icloud" not in res["fix"] or res.get("login") != "terminal"): fails.append("login_status icloud")
                 elif name == "collect":
                     brief = res
                     if res.get("status") not in ("need_login", "not_implemented"): fails.append(name)

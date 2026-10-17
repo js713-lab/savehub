@@ -5,7 +5,7 @@ dashboard login. Each push is CONFIRMED by reading the item back (GET /api/items
 SqliteSink: write straight into a local SaveHub SQLite DB (no server needed).
 """
 from __future__ import annotations
-import logging, os, time
+import json, logging, os, time
 from dataclasses import dataclass
 from typing import Optional
 import httpx
@@ -24,6 +24,20 @@ class PushResult:
     created: bool = False
     confirmed: bool = False      # read back from SaveHub with the same platform+url
     error: str = ""
+    updated: bool = False        # already stored, but a newer version (e.g. a changed iCloud file) refreshed it
+
+
+def versioned(item: CollectedItem) -> bool:
+    """Items whose external_id carries a version (extra.version, e.g. iCloud files/contacts): a changed version updates
+    the stored item (same platform+url) instead of being skipped as a duplicate. Never deletes anything."""
+    return bool(item.external_id and (item.extra or {}).get("version"))
+
+
+def update_fields(item: CollectedItem, account_id=None, collected_at="") -> dict:
+    d = item.to_savehub(account_id, collected_at)
+    out = {k: d[k] for k in ("title", "content", "author", "external_id", "media_url") if k in d}
+    out["raw"] = json.dumps(d.get("raw") or {}, ensure_ascii=False)[:20000]
+    return out
 
 
 class RestSink:
@@ -98,6 +112,10 @@ class RestSink:
             g = self._req("GET", f"/api/items/{res.id}")
             res.confirmed = g.status_code == 200 and g.json().get("url") == item.url and g.json().get("platform") == item.platform
             if not res.confirmed: res.error = f"read-back mismatch (HTTP {g.status_code})"
+            elif not res.created and versioned(item) and g.json().get("external_id") != item.external_id:
+                u = self._req("PATCH", f"/api/items/{res.id}", json=update_fields(item, account_id, collected_at))
+                if u.status_code == 200: res.updated = True
+                else: res.error = f"update failed: HTTP {u.status_code}"
         except PushError as e:
             res.error = str(e)
         return res
@@ -144,6 +162,8 @@ class SqliteSink:
             res.id, res.created = self.db.add_item(item.to_savehub(account_id, collected_at))
             got = self.db.get_item(res.id)
             res.confirmed = bool(got and got["url"] == item.url and got["platform"] == item.platform)
+            if res.confirmed and not res.created and versioned(item) and got.get("external_id") != item.external_id:
+                self.db.update_item(res.id, update_fields(item, account_id, collected_at)); res.updated = True
         except Exception as e:
             res.error = str(e)
         return res

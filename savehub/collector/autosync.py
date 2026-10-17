@@ -470,7 +470,7 @@ def request_sync(platform: Optional[str] = None, account: Optional[str] = None, 
         if not cls.implemented: raise ValueError(f"the '{platform}' collector is not implemented")
     akey = sessions.account_key(account) if account else None          # raises ValueError on bad handles (regex)
     if akey and not platform: raise ValueError("account needs a platform")
-    rt = runtime.collector_runtime()
+    rt = runtime.runtime_for(platform) if platform else runtime.collector_runtime()
     if not rt["available"]: raise Unavailable(rt.get("reason") or "browser collector unavailable on this server")
     engine = engine or Engine(sessions_dir=sessions_dir)
     if akey:

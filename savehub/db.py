@@ -17,6 +17,7 @@ PLATFORMS = {
     "tiktok":      {"name": "TikTok", "method": "import", "detail": "No public favourites API for personal use. Import TikTok data export JSON (Favorite Videos / Like List)."},
     "douyin":      {"name": "抖音 Douyin", "method": "import", "detail": "No public favourites API. Paste share links (v.douyin.com) or import CSV/JSON/HTML link list."},
     "xiaohongshu": {"name": "小红书 RED", "method": "import", "detail": "No public API. Paste share text/links (xhslink.com) or import CSV/JSON/HTML link list."},
+    "icloud":      {"name": "iCloud", "method": "collector", "detail": "iCloud Drive files + iCloud Contacts, read-only, via the on-box collector (pyicloud + icloud4u-mcp). Log in once in a terminal on the box: python -m savehub.collector login icloud --account @<handle> (Apple ID, password, 2FA code; the password is never stored, only the trusted session, encrypted). Files are indexed with name, path, type, size, modified date and the text of small documents/PDFs; auto-sync picks up new and changed files."},
     "web":         {"name": "Web / Bookmarks", "method": "import", "detail": "Add a link manually, paste links, or import browser bookmarks HTML (Chrome/Firefox/Safari export)."},
 }
 

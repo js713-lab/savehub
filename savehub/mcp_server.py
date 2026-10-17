@@ -48,7 +48,8 @@ def mcp_token() -> str:
 
 mcp = FastMCP("savehub", transport_security=transport_security(),
               stateless_http=os.environ.get("SAVEHUB_MCP_STATELESS", "1") != "0",
-              instructions="Personal saved-items library (bookmarks/saves/favourites from X, Threads, Instagram, Facebook, Messenger, WhatsApp, WeChat, TikTok, Douyin, Xiaohongshu), contacts and accounts.")
+              instructions="Personal saved-items library (bookmarks/saves/favourites from X, Threads, Instagram, Facebook, Messenger, WhatsApp, WeChat, TikTok, Douyin, Xiaohongshu; iCloud Drive files + iCloud Contacts, read-only), contacts and accounts. "
+                           "Logins (incl. the Apple ID password for iCloud) only happen on the box in a terminal; never ask the user for a password here.")
 
 def enabled(): return db.get_settings()["enabled_platforms"]
 
@@ -112,8 +113,11 @@ def _collector_info(platform: str) -> dict:
     cls = base.REGISTRY.get(platform)
     if cls is None: return {"supported": False, "implemented": False, "accounts": [], "logged_in_accounts": 0}
     accts = _session_list(platform)
-    return {"supported": True, "implemented": bool(cls.implemented), "accounts": accts,
-            "logged_in_accounts": sum(1 for a in accts if a["logged_in"]), "backend": _backend_info(platform)}
+    return {"supported": True, "implemented": bool(cls.implemented), "kind": cls.kind, "kinds": list(getattr(cls, "kinds", (cls.kind,))),
+            "uses_browser": bool(getattr(cls, "uses_browser", True)), "login": getattr(cls, "login_mode", "browser"),
+            "supports_unsave": bool(cls.supports_unsave and cls.implemented), "accounts": accts,
+            "logged_in_accounts": sum(1 for a in accts if a["logged_in"]), "backend": _backend_info(platform),
+            **({"runtime": _rt().runtime_for(platform)} if not getattr(cls, "uses_browser", True) else {})}
 
 def _backend_info(platform: str) -> dict:
     """auto | playwright | <library> setting + which libraries are installed (set it on the dashboard Accounts page)."""
@@ -132,20 +136,27 @@ def list_platforms() -> dict:
 
 @mcp.tool()
 def login_status(platform: str, account: Optional[str] = None) -> dict:
-    """Report whether a saved browser session exists for a platform, per account (account = handle like '@me'; omit for all accounts).
-    Read-only: login itself only happens on the box (python -m savehub.collector login <platform> --account @<handle>)."""
+    """Report whether a saved session exists for a platform, per account (account = handle like '@me'; omit for all accounts);
+    session = saved | expired (needs login) | missing | locked | invalid. Read-only: login itself only happens on the box
+    (python -m savehub.collector login <platform> --account @<handle>; for icloud a terminal prompt for Apple ID, password and 2FA)."""
     base, sessions = _col()
     if platform not in base.REGISTRY: return {"error": f"unknown platform '{platform}'; one of {sorted(base.REGISTRY)}"}
     try: accts = _session_list(platform, account)
     except ValueError as e: return {"error": str(e)}
     ok = [a for a in accts if a["logged_in"]]
-    r = {"platform": platform, "collector_implemented": bool(base.REGISTRY[platform].implemented), "logged_in": bool(ok),
-         "accounts": accts, "collector_runtime": collector_runtime(), "backend": _backend_info(platform)}
+    cls = base.REGISTRY[platform]
+    r = {"platform": platform, "collector_implemented": bool(cls.implemented), "logged_in": bool(ok),
+         "accounts": accts, "collector_runtime": _rt().runtime_for(platform), "backend": _backend_info(platform),
+         "login": getattr(cls, "login_mode", "browser")}
+    for a in accts:
+        if a["session"] == "expired": a["needs_login"] = True; a["fix"] = _login_cmd(platform, a["account"])
     if not base.REGISTRY[platform].implemented:
         r["note"] = f"the '{platform}' collector is not implemented yet (only {[k for k, c in base.REGISTRY.items() if c.implemented]})"
     if not ok:
+        how = ("in a terminal on the box; it asks for the Apple ID, password and 2FA code, and keeps only the trusted session"
+               if getattr(cls, "login_mode", "browser") == "terminal" else "on the box (needs a desktop/display)")
         r["fix"] = (f"No valid saved session for {platform}" + (f" account {account}" if account else "") +
-                    f". Log in on the box (needs a desktop/display): {_login_cmd(platform, account or '')}")
+                    f". Log in {how}: {_login_cmd(platform, account or '')}")
     return r
 
 def _child_env() -> dict:
@@ -187,10 +198,11 @@ async def _run_collect_proc(cmd: list, timeout: int) -> dict:
 
 @mcp.tool()
 async def collect(platform: str, account: Optional[str] = None, max_items: Optional[int] = None, unsave: bool = False) -> dict:
-    """Run the browser collector for a platform and store new saves in SaveHub, tagged with the account they came from
+    """Run the collector for a platform and store new saves in SaveHub, tagged with the account they came from
     (linked account_id + source=collector:<platform>:<handle>). account = handle like '@me'; omit to collect every logged-in account.
-    max_items caps items per account (default 200). unsave=false (default) never touches the app; ONLY unsave=true un-saves items
-    on the real app, and only after each one is confirmed stored. Needs a saved session (log in on the box first) and a browser."""
+    max_items caps items per account (default 200; icloud: per kind, files and contacts). unsave=false (default) never touches the app;
+    ONLY unsave=true un-saves items on the real app, and only after each one is confirmed stored (refused for read-only collectors
+    such as icloud, messenger, whatsapp). Needs a saved session (log in on the box first) and a browser (icloud: no browser, pyicloud)."""
     base, sessions = _col()
     if platform not in base.REGISTRY: return {"error": f"unknown platform '{platform}'; one of {sorted(base.REGISTRY)}"}
     if platform not in enabled(): return {"error": f"platform '{platform}' is not enabled in this config"}
@@ -198,6 +210,9 @@ async def collect(platform: str, account: Optional[str] = None, max_items: Optio
         return {"error": f"the '{platform}' collector is not implemented yet; only {[k for k, c in base.REGISTRY.items() if c.implemented]} can be collected. "
                          f"Use import_file with the app's data export instead.", "status": "not_implemented"}
     if max_items is not None and not (1 <= int(max_items) <= 2000): return {"error": "max_items must be between 1 and 2000"}
+    if unsave is True and not base.REGISTRY[platform].supports_unsave:
+        return {"error": f"'{platform}' is read-only in SaveHub (its collector gathers {base.REGISTRY[platform].kind}); nothing can be un-saved or deleted there",
+                "status": "unsave_not_supported"}
     try: accts = _session_list(platform, account)
     except ValueError as e: return {"error": str(e)}
     ready = [a for a in accts if a["logged_in"]]
@@ -205,9 +220,10 @@ async def collect(platform: str, account: Optional[str] = None, max_items: Optio
         return {"status": "need_login", "platform": platform, "accounts": accts,
                 "error": f"No valid saved session for {platform}" + (f" account {account}" if account else "") +
                          f". Log in on the box first: {_login_cmd(platform, account or '')} (then call collect again)."}
-    rt = collector_runtime()
+    rt = _rt().runtime_for(platform)
     if not rt["available"]:
-        return {"status": "browser_unavailable", "platform": platform, "error": "Cannot collect on this server: " + rt["reason"]}
+        return {"status": "browser_unavailable" if getattr(base.REGISTRY[platform], "uses_browser", True) else "collector_unavailable",
+                "platform": platform, "error": "Cannot collect on this server: " + rt["reason"]}
     runs, unsave = [], unsave is True
     rt_mod = _rt()
     for a in ready:

@@ -114,6 +114,17 @@ def _run_collect_locked(col, platform, cfg, sink, sfile, acct, browser, context_
             if cfg.account_id is None: ev("account.not_found", logging.WARNING, handle=acct, note="items stored without account link (still tagged in source)")
             else: ev("account.linked", handle=acct, account_id=cfg.account_id)
     summary["account_id"] = cfg.account_id
+    if not getattr(col, "uses_browser", True):                          # API collector (iCloud): no browser, never un-saves
+        summary["backend"] = summary["backend_setting"] = getattr(col, "backend", "api")
+        if sink is not None and hasattr(sink, "known_keys"):            # every stored version, not only the newest page:
+            cfg.known = sink.known_keys(platform, limit=200000)         # unchanged files are skipped before any download
+        items, info = col.collect_api(state, cfg, sfile, acct)          # refreshes (or marks rejected) the session file itself
+        summary.update({k: v for k, v in info.items() if k != "backend"})
+        _push(col, items, cfg, sink, acct, collected_at, summary)
+        state = None
+        summary["elapsed_s"] = round(time.time() - started, 1)
+        ev("run.done", **{k: v for k, v in summary.items() if k not in ("items",)})
+        return summary
     items = _library_collect(platform, choice, names, state, cfg, acct, summary)
     if items is not None:                                               # library backend: no browser, never un-saves
         _push(col, items, cfg, sink, acct, collected_at, summary)
@@ -149,6 +160,7 @@ def _push(col, items, cfg, sink, acct, collected_at, summary) -> list:
             r = sink.push(it, cfg.account_id, collected_at); results.append(r)
             if r.error: summary["push_failed"] += 1; ev("push.failed", logging.WARNING, url=it.url, error=r.error)
             elif r.created: summary["created"] += 1
+            elif getattr(r, "updated", False): summary["updated"] = summary.get("updated", 0) + 1   # changed file/contact refreshed
             else: summary["duplicates"] += 1
     summary["items"] = [{"url": it.url, "author_handle": it.author_handle, "posted_at": it.posted_at,
                          "has_media": it.has_media, "text": it.text[:140],
@@ -185,6 +197,13 @@ def run_login(platform: str, sessions_dir=None, timeout_s: int = 600, wait_enter
     try: akey = sessions.account_key(account)
     except ValueError as e: raise CollectorError(str(e)) from None
     sfile = sessions.session_path(platform, sessions_dir, akey)
+    if getattr(col, "login_mode", "browser") == "terminal":
+        # no web-cookie flow (iCloud): the collector prompts in this terminal (account id, password, 2FA code). The password
+        # only goes to the app's own sign-in; just the resulting trusted session is saved (encrypted with the vault key).
+        info = col.terminal_login(sfile, akey)
+        ev("login.saved", platform=platform, account=akey, session_file=str(sfile))
+        return {"platform": platform, "account": akey if akey == sessions.DEFAULT_ACCOUNT else "@" + akey, **sessions.describe(sfile),
+                **{k: v for k, v in (info or {}).items() if k in ("drive_check",)}, "status": "logged_in"}
     with contextlib.ExitStack() as stack:
         if browser is None:
             pw = stack.enter_context(_require_playwright()())

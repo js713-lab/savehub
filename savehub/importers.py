@@ -8,7 +8,8 @@ URL_RE = re.compile(r"https?://[^\s<>\"'）)】，。]+")
 DOMAINS = [("x.com","x"),("twitter.com","x"),("t.co","x"),("threads.net","threads"),("threads.com","threads"),("instagram.com","instagram"),
            ("facebook.com","facebook"),("fb.watch","facebook"),("fb.com","facebook"),("m.me","messenger"),("messenger.com","messenger"),
            ("wa.me","whatsapp"),("whatsapp.com","whatsapp"),("weixin.qq.com","wechat"),("mp.weixin","wechat"),("tiktok.com","tiktok"),
-           ("douyin.com","douyin"),("iesdouyin.com","douyin"),("xiaohongshu.com","xiaohongshu"),("xhslink.com","xiaohongshu")]
+           ("douyin.com","douyin"),("iesdouyin.com","douyin"),("xiaohongshu.com","xiaohongshu"),("xhslink.com","xiaohongshu"),
+           ("icloud.com","icloud")]
 
 def detect_platform(url, default="web"):
     u = (url or "").lower()
@@ -288,7 +289,7 @@ PLATFORM_ALIASES = {
     "facebook": "facebook", "fb": "facebook", "messenger": "messenger", "msgr": "messenger", "whatsapp": "whatsapp", "wa": "whatsapp",
     "wechat": "wechat", "weixin": "wechat", "wx": "wechat", "微信": "wechat", "tiktok": "tiktok", "tt": "tiktok",
     "douyin": "douyin", "dy": "douyin", "抖音": "douyin", "xiaohongshu": "xiaohongshu", "xhs": "xiaohongshu", "red": "xiaohongshu",
-    "rednote": "xiaohongshu", "小红书": "xiaohongshu", "web": "web",
+    "rednote": "xiaohongshu", "小红书": "xiaohongshu", "icloud": "icloud", "apple": "icloud", "web": "web",
 }
 
 def clean_handle(h):

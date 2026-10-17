@@ -28,7 +28,7 @@ th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);ver
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
 .kpi{font-size:30px;font-weight:800}.bar{height:10px;border-radius:5px;background:var(--accent)}.barrow{display:grid;grid-template-columns:150px 1fr 36px;gap:8px;align-items:center;margin:6px 0;font-size:13px}
 .digest{font-size:15px;line-height:1.65;white-space:pre-wrap}
-.method{font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px}.method.live_api{background:#16a34a;color:#fff}.method.import{background:#475569;color:#fff}
+.method{font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px}.method.live_api{background:#16a34a;color:#fff}.method.import{background:#475569;color:#fff}.method.collector{background:#3693f3;color:#fff}
 .modal{position:fixed;inset:0;background:rgba(5,8,15,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:20;padding:16px;opacity:0;transition:opacity .18s ease}.modal.show{opacity:1}
 .modal-card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:20px;width:min(640px,100%);max-height:90vh;overflow:auto;box-shadow:0 24px 60px rgba(0,0,0,.45);transform:translateY(10px) scale(.98);transition:transform .2s cubic-bezier(.2,.8,.2,1)}.modal.show .modal-card{transform:none}
 .form{display:grid;grid-template-columns:1fr 1fr;gap:10px}.form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}.form .full{grid-column:1/-1}
@@ -159,7 +159,7 @@ code{font:12px ui-monospace,monospace;background:var(--panel2);padding:0 4px;bor
 .pmark.haslogo{overflow:hidden}.pmark .plogo{display:block;width:62%;height:62%;object-fit:contain;pointer-events:none}
 .pmark.haslogo[data-logo=facebook] .plogo,.pmark.haslogo[data-logo=whatsapp] .plogo,.pmark.haslogo[data-logo=messenger] .plogo{width:66%;height:66%}
 .pmark.haslogo[data-logo=xiaohongshu] .plogo{width:84%;height:84%}.pmark.haslogo[data-logo=x] .plogo{width:54%;height:54%}
-.pmark.haslogo[data-logo=douyin] .plogo{width:70%;height:70%}.pmark.haslogo[data-logo=web] .plogo{width:52%;height:52%}
+.pmark.haslogo[data-logo=douyin] .plogo{width:70%;height:70%}.pmark.haslogo[data-logo=icloud] .plogo{width:72%;height:72%}.pmark.haslogo[data-logo=web] .plogo{width:52%;height:52%}
 .pmark.xs.haslogo[data-logo=xiaohongshu] .plogo{width:92%;height:92%}
 [data-theme=dark] .pmark.haslogo:is([data-logo=x],[data-logo=threads],[data-logo=tiktok],[data-logo=douyin]){box-shadow:inset 0 0 0 1px rgba(255,255,255,.28)}
 .avatar .pdot{display:grid;place-items:center;overflow:hidden}.avatar .pdot .plogo{width:62%;height:62%;object-fit:contain}

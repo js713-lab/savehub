@@ -458,4 +458,4 @@ def test_wechat_stays_stub_with_reason():
     c = get_collector("wechat")
     assert not c.implemented and "no usable web client" in c.notes
     impl = sorted(k for k, v in REGISTRY.items() if v.implemented)
-    assert impl == ["douyin", "facebook", "instagram", "messenger", "threads", "tiktok", "whatsapp", "x", "xiaohongshu"]
+    assert impl == ["douyin", "facebook", "icloud", "instagram", "messenger", "threads", "tiktok", "whatsapp", "x", "xiaohongshu"]

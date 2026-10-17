@@ -6,3 +6,10 @@ playwright>=1.45
 # Pinned; checked with pip-audit. Remove a line to drop that backend (auto then simply uses the browser).
 twscrape==0.20.1        # X bookmarks via X's web GraphQL with your session cookies (MIT)
 instaloader==4.15.4     # Instagram saved posts with your session cookies (MIT)
+# iCloud collector (API client, no browser; read-only). Your icloud4u-mcp is used as a library at a pinned commit (its MCP
+# server is never started); pyicloud does the Apple ID sign-in / trusted-session reuse; pypdf/python-docx/openpyxl extract text.
+pyicloud==2026.10.1     # iCloud web API client (MIT)
+icloud-docs-mcp @ git+https://github.com/js713-lab/icloud4u-mcp.git@1fdc95a13c244d86883908eb14a2377e78d17380   # MIT
+pypdf==6.21.1           # PDF text (BSD)
+python-docx==1.2.0      # .docx text (MIT)
+openpyxl==3.1.5         # .xlsx text (MIT)
