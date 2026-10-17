@@ -533,3 +533,64 @@ def test_login_and_collect_refuse_without_vault_key(env, monkeypatch):
     with pytest.raises(CollectorError, match="vault key"):
         icloud.ICloudCollector().collect_api({"cookies": [], "icloud": {"apple_id": APPLE_ID}}, RunConfig(), env.sd / "icloud@x.json", "x")
     assert not (env.sd / "icloud@x.json").exists()
+
+
+# ======================================================================== login-terminal launcher (hand the login to the user)
+class _FakeProc:
+    pid = 4242
+
+
+def _launch(monkeypatch, tmp_path, **kw):
+    from savehub.collector import terminal
+    calls = []
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_SHOULD_NOT_LEAK")
+    monkeypatch.setenv("SAVEHUB_DASHBOARD_PASSWORD", "dash-SHOULD_NOT_LEAK")
+    monkeypatch.setenv("SAVEHUB_DB", str(tmp_path / "t.db"))
+    which = kw.pop("which", lambda n: f"/usr/bin/{n}" if n in ("xterm", "xfce4-terminal") else None)
+    r = terminal.launch_login_terminal("icloud", kw.pop("account", "@js.yip"), tmp_path / "sess", kw.pop("display", ":7"),
+                                       kw.pop("terminal", None), popen=lambda argv, **o: calls.append((argv, o)) or _FakeProc(), which=which)
+    return r, calls
+
+
+def test_login_terminal_argv_env_and_no_password(monkeypatch, tmp_path):
+    r, calls = _launch(monkeypatch, tmp_path)
+    assert r["status"] == "launched" and r["terminal"] == "xterm" and r["display"] == ":7" and r["account"] == "@js.yip" and r["pid"] == 4242
+    (argv, opts), = calls
+    assert argv[:4] == ["/usr/bin/xterm", "-T", "SaveHub login: iCloud @js.yip", "-e"] and argv[4:6] == ["sh", "-c"]
+    tail = argv[argv.index("savehub-login") + 1:]
+    assert tail == [sys.executable, "-m", "savehub.collector", "--sessions-dir", str(tmp_path / "sess"), "login", "icloud", "--account", "@js.yip"]
+    env = opts["env"]
+    assert env["DISPLAY"] == ":7" and env["SAVEHUB_DB"] == str(tmp_path / "t.db")
+    assert "GITHUB_TOKEN" not in env and "SAVEHUB_DASHBOARD_PASSWORD" not in env
+    assert opts["start_new_session"] and opts.get("shell") is None
+    blob = json.dumps([argv, r]).lower()
+    assert "password=" not in blob and "ghp_" not in blob and "should_not_leak" not in json.dumps(env).lower()
+    # xfce4-terminal: own process (not a shared server) and -x
+    r, calls = _launch(monkeypatch, tmp_path, terminal="xfce4-terminal")
+    assert calls[0][0][:5] == ["/usr/bin/xfce4-terminal", "--disable-server", "--title", "SaveHub login: iCloud @js.yip", "-x"]
+
+
+def test_login_terminal_refusals(monkeypatch, tmp_path):
+    from savehub.collector import terminal
+    with pytest.raises(CollectorError, match="own browser window"):
+        terminal.launch_login_terminal("x", "@a", tmp_path, ":1", popen=lambda *a, **k: pytest.fail("launched"))
+    with pytest.raises(ValueError):                                      # shell metacharacters never reach a command line
+        _launch(monkeypatch, tmp_path, account="@a;rm -rf ~")
+    with pytest.raises(CollectorError, match="invalid display"):
+        _launch(monkeypatch, tmp_path, display=":1; xterm")
+    with pytest.raises(CollectorError, match="no terminal emulator"):
+        _launch(monkeypatch, tmp_path, which=lambda n: None)
+    monkeypatch.delenv("DISPLAY", raising=False)
+    with pytest.raises(CollectorError, match="no X display"):
+        terminal.launch_login_terminal("icloud", "@a", tmp_path, None, popen=lambda *a, **k: pytest.fail("launched"), which=lambda n: "/usr/bin/xterm")
+
+
+def test_login_terminal_cli(monkeypatch, tmp_path, capsys):
+    from savehub.collector import terminal
+    seen = {}
+    monkeypatch.setattr(terminal, "launch_login_terminal", lambda *a: seen.setdefault("args", a) and {"status": "launched"})
+    assert cli.main(["--sessions-dir", str(tmp_path), "login-terminal", "icloud", "--account", "@me", "--display", ":3"]) == 0
+    assert seen["args"] == ("icloud", "@me", str(tmp_path), ":3", None)
+    monkeypatch.undo()
+    assert cli.main(["login-terminal", "x", "--account", "@me", "--display", ":3"]) != 0
+    assert "own browser window" in capsys.readouterr().out

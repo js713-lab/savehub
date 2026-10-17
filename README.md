@@ -280,6 +280,11 @@ xlsx, txt/md/csv/json…). Its MCP server is not started. Install: `pip install 
 ```bash
 .venv/bin/python -m savehub.collector login icloud --account @js     # any handle you like; one per Apple ID
 ```
+To hand the login to someone looking at the box desktop (like the browser logins, which open their own Chromium window),
+open it in a **terminal window** on that display instead; the password is typed only in that window:
+```bash
+.venv/bin/python -m savehub.collector login-terminal icloud --account @js --display :1   # xterm / xfce4-terminal / x-terminal-emulator / ...
+```
 It asks for:
 1. **Apple ID** (e-mail or phone; remembered for the next login of the same account),
 2. **password**, read with `getpass` (not echoed, never stored, never logged),

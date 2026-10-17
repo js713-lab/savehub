@@ -1,4 +1,4 @@
-"""CLI:  python -m savehub.collector {platforms,sessions,login,collect,autosync} ...
+"""CLI:  python -m savehub.collector {platforms,sessions,login,login-terminal,collect,autosync} ...
 
 Exit codes: 0 ok · 1 error · 2 need login (session missing/expired) · 3 platform not implemented · 4 SaveHub push failed
             · 5 busy (another run holds this account) · 6 session locked (encrypted, no/wrong vault key).
@@ -29,6 +29,13 @@ def build_parser():
                                               "so several accounts per app can stay logged in. Omit = legacy single session")
     lg.add_argument("--timeout", type=int, default=600, help="seconds to wait for the login (default 600)")
     lg.add_argument("--wait-enter", action="store_true", help="wait for Enter in this terminal instead of auto-detecting")
+
+    lt = sub.add_parser("login-terminal", help="open a terminal WINDOW on the box desktop running a terminal-mode login (icloud), "
+                                               "to hand to the user like the browser logins; the password is typed only in that window")
+    lt.add_argument("platform")
+    lt.add_argument("--account", default="", help="handle for this login (e.g. @js.yip)")
+    lt.add_argument("--display", help="X display of the desktop the user sees (default $DISPLAY)")
+    lt.add_argument("--terminal", help="terminal emulator to use (default: first of xterm, xfce4-terminal, x-terminal-emulator, ...)")
 
     c = sub.add_parser("collect", help="scrape saved items and push them to SaveHub")
     c.add_argument("platform")
@@ -95,6 +102,10 @@ def main(argv=None) -> int:
         elif a.cmd == "login":
             from .runner import run_login
             out = run_login(a.platform, a.sessions_dir, a.timeout, a.wait_enter, account=a.account)
+        elif a.cmd == "login-terminal":
+            from .terminal import launch_login_terminal
+            try: out = launch_login_terminal(a.platform, a.account, a.sessions_dir, a.display, a.terminal)
+            except ValueError as e: raise CollectorError(str(e)) from None
         elif a.cmd == "collect":
             from .runner import run_collect
             from .client import RestSink, SqliteSink
