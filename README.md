@@ -111,7 +111,7 @@ HTTP variant (clients that support streamable HTTP):
 ```json
 { "mcpServers": { "savehub": { "url": "http://127.0.0.1:8765/mcp", "headers": { "Authorization": "Bearer yourtoken" } } } }
 ```
-Tools: `search_items, list_items, get_item, add_item, tag_items, get_summary, list_platforms, import_file, search_contacts, sync_now, list_accounts, add_account, search_accounts, login_status, collect` (the last two drive the browser collector, see below).
+Tools (17): `search_items, list_items, get_item, add_item, tag_items, get_summary, list_platforms, import_file, search_contacts, sync_now, list_accounts, add_account, search_accounts, login_status, collect, sync_status, set_autosync` (the last four drive the browser collector / auto-sync, see below).
 
 ## Tests
 ```bash
@@ -123,6 +123,10 @@ Tools: `search_items, list_items, get_item, add_item, tag_items, get_summary, li
 .venv/bin/python -m pytest -q tests/collector_test.py   # browser collector: X parser on HTML fixtures, scroll/de-dupe, login detection, push to a temp SaveHub, unsave safety
 .venv/bin/python -m pytest -q tests/backends_test.py          # library backends (twscrape, instaloader): mocked libraries, cookie conversion, fallback, no files left
 .venv/bin/python -m pytest -q tests/autosync_security_test.py   # auto-sync (incremental stop, backoff, needs-login, toggle, locks) + security (session perms/encryption, auth, CSRF, headers, log scrubbing)
+.venv/bin/python -m pytest -q -s tests/e2e_all_apps_test.py  # ONE end-to-end run of the whole wiring: real combined server (temp DB/key/token/password), all 9 collectors x 2 accounts
+                                                              # through MCP collect (HTTP+bearer), REST Sync now and autosync --once; fake apps via Playwright routes
+                                                              # (offline), dedupe, incremental stop, account links, EN/中文 search, un-save guards, X twscrape->Playwright
+                                                              # fallback, auth/CSRF/headers, needs-login without retry, WeChat not_implemented; prints a pass/fail matrix
 ```
 
 ## Sample data
@@ -164,6 +168,9 @@ against the live Render site as well as a local server. `--sink sqlite --db path
 | WeChat | ❌ stub on purpose: no usable web client (web WeChat refuses most accounts and never showed 收藏/contacts; the desktop app is native, not automatable with Playwright). Use the paste/CSV/JSON importer |
 
 Contact items use the same schema/sink as saves (`title` = name, `extra.kind` = `contact` / `group` / `chat` / `starred_message`).
+People, groups and chats (not starred messages) are also mirrored into the **contacts** table (name, WhatsApp phone, thread/profile URL
+and last message in notes, `source=collector:<platform>:<handle>`, same `account_id`), so the Contacts page, `/api/contacts` and MCP
+`search_contacts` find them; de-duplicated per platform + name + URL.
 Every non-X collector is built on `savehub/collector/platforms/_common.py` (`FeedCollector`): DOM extraction + XHR JSON
 captured with `page.on('response')` + embedded `<script type="application/json">`, merged and de-duplicated by id, `max_items`,
 idle/scroll stops, opt-in verified un-save. Selectors live in each module's `SEL` dict; fixtures in `tests/fixtures/<platform>_*`

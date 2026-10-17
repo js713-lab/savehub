@@ -22,6 +22,11 @@ class NeedLogin(CollectorError):
 
     def __init__(self, platform: str, session_file: Path | str, detail: str = "", account: str = ""):
         self.platform, self.session_file, self.detail = platform, str(session_file), detail
+        if not account and session_file:
+            # raised from inside a collector (redirected to the login page) only the session file is known:
+            # <platform>@<handle>.json -> that account, so the fix names the right `login --account @<handle>` command
+            stem = Path(str(session_file)).stem
+            if "@" in stem: account = stem.partition("@")[2]
         self.account = account if account and account != "default" else ""
         self.fix = f"python -m savehub.collector login {platform}" + (f" --account @{self.account}" if self.account else "")
         who = f"'{platform}' account @{self.account}" if self.account else f"'{platform}'"

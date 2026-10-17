@@ -243,6 +243,27 @@ def test_settings_sync_drive_folder(tmp_path):
     loc = c.get("/api/x/auth", follow_redirects=False).headers["location"]
     assert "code_challenge_method=S256" in loc and "bookmark.read" in loc and "client_id=TEST_CLIENT" in loc
 
+def test_collected_contacts_are_mirrored_into_contacts():
+    """Messenger/WhatsApp collector items (extra.kind contact/group/chat) also show up in /api/contacts, linked to the account."""
+    aid = c.post("/api/accounts", json={"platform": "whatsapp", "handle": "@mirror", "display_name": "@mirror"}).json()["id"]
+    base = {"platform": "whatsapp", "source": "collector:whatsapp:mirror", "account_id": aid}
+    r = c.post("/api/items", json={**base, "url": "https://wa.me/60199990001", "title": "Mirror Person",
+                                   "raw": {"kind": "contact", "phone": "+60199990001", "last_message": "hi"}}).json()
+    assert r["created"]
+    c.post("/api/items", json={**base, "url": "https://web.whatsapp.com/#group/1@g.us", "title": "Mirror Group", "raw": {"kind": "group"}})
+    c.post("/api/items", json={**base, "url": "https://web.whatsapp.com/#starred/x", "title": "starred text", "raw": {"kind": "starred_message"}})
+    c.post("/api/items", json={"platform": "whatsapp", "url": "https://wa.me/60199990009", "title": "Manual", "raw": {"kind": "contact"}})  # manual add
+    cs = c.get("/api/contacts", params={"q": "Mirror"}).json()["contacts"]
+    assert sorted(x["name"] for x in cs) == ["Mirror Group", "Mirror Person"] and all(x["account_id"] == aid for x in cs)
+    p = next(x for x in cs if x["name"] == "Mirror Person")
+    assert p["phones"] == ["+60199990001"] and p["source"] == "collector:whatsapp:mirror" and "last message: hi" in p["notes"]
+    assert c.get("/api/contacts", params={"q": "Manual"}).json()["total"] == 0 and c.get("/api/contacts", params={"q": "starred"}).json()["total"] == 0
+    # the same person collected again (or by a second account) is not duplicated
+    c.post("/api/items", json={**base, "url": "https://wa.me/60199990001", "title": "Mirror Person", "raw": {"kind": "contact"}})
+    from savehub import db
+    db.mirror_collected_contact({**base, "url": "https://wa.me/60199990001", "title": "Mirror Person", "raw": {"kind": "contact"}})
+    assert c.get("/api/contacts", params={"q": "Mirror Person"}).json()["total"] == 1
+
 def test_clear_samples():
     n = c.post("/api/samples/clear").json(); assert n["items"] == 30
     assert c.get("/api/items").json()["total"] > 0  # imported items remain

@@ -197,6 +197,14 @@ def test_login_detection(browser, sessdir):
     assert r.returncode == 2 and out["status"] == "need_login" and out["session_file"].endswith("none/x.json") and out["fix"] == "python -m savehub.collector login x"
 
 
+def test_need_login_names_the_account_session():
+    """Raised inside a collector (login redirect) only the session file is known: the fix must still name the account."""
+    e = NeedLogin("x", "/tmp/sessions/x@js_alt.json", "redirected to login page (https://x.com/i/flow/login)")
+    assert e.account == "js_alt" and e.fix == "python -m savehub.collector login x --account @js_alt" and "@js_alt" in str(e)
+    e = NeedLogin("x", "/tmp/sessions/x.json", "redirected")
+    assert e.account == "" and e.fix == "python -m savehub.collector login x"
+
+
 # ---------------------------------------------------------------- push to a real SaveHub over REST
 def test_push_to_savehub_and_search(browser, sessdir, savehub):
     base, _ = savehub

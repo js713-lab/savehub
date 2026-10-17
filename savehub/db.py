@@ -145,7 +145,35 @@ def add_item(d, tag=True):
         if ex: return ex["id"], False
     cols = [f for f in ITEM_FIELDS if f in d]
     cur = c.execute(f"INSERT INTO items({','.join(cols)},created_at) VALUES({','.join('?'*len(cols))},?)", [d[f] for f in cols] + [now_iso()])  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
-    c.commit(); return cur.lastrowid, True
+    c.commit()
+    mirror_collected_contact(d)
+    return cur.lastrowid, True
+
+COLLECTED_CONTACT_KINDS = ("contact", "group", "chat")
+
+def mirror_collected_contact(d):
+    """Contacts collectors (Messenger, WhatsApp) store each person/group as an item (extra.kind=contact|group|chat).
+    Mirror it into the contacts table too, so the Contacts page, /api/contacts and MCP search_contacts find it, linked
+    to the same account. De-duplicated per platform + name + item URL (two people with the same name stay separate)."""
+    src = str(d.get("source") or "")
+    if not src.startswith("collector:"): return None
+    raw = d.get("raw")
+    if isinstance(raw, str):
+        try: raw = json.loads(raw)
+        except ValueError: raw = {}
+    raw = raw if isinstance(raw, dict) else {}
+    if raw.get("kind") not in COLLECTED_CONTACT_KINDS or not d.get("title"): return None
+    url = d.get("url") or ""
+    notes = "\n".join(x for x in (url, "group chat" if raw.get("kind") == "group" else "",
+                                    f"last message: {raw['last_message']}" if raw.get("last_message") else "") if x)
+    c = conn()
+    ex = c.execute("SELECT id FROM contacts WHERE platform=? AND name=? AND (notes=? OR notes LIKE ?)",
+                   (d["platform"], d["title"], url, url + "\n%")).fetchone()
+    if ex: return ex["id"]
+    phones = [raw["phone"]] if raw.get("phone") else []
+    cur = c.execute("INSERT INTO contacts(name,phones,emails,org,platform,account_id,notes,is_sample,source,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (d["title"], json.dumps(phones), "[]", "", d["platform"], d.get("account_id"), notes, 0, src, now_iso()))
+    c.commit(); return cur.lastrowid
 
 def update_item(item_id, d):
     d = {k: v for k, v in d.items() if k in ITEM_FIELDS}
