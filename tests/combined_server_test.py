@@ -8,7 +8,7 @@ from mcp.client.streamable_http import streamablehttp_client
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PORT, TOKEN, RHOST = 8900, "test-token-123", "savehub-test.onrender.com"
 BASE = f"http://127.0.0.1:{PORT}"
-env = {**os.environ, "PORT": str(PORT), "SAVEHUB_MCP_TOKEN": TOKEN, "RENDER_EXTERNAL_HOSTNAME": RHOST,
+env = {**os.environ, "PORT": str(PORT), "SAVEHUB_MCP_TOKEN": TOKEN, "RENDER_EXTERNAL_HOSTNAME": RHOST, "RENDER_GIT_COMMIT": "0123456789abcdef0123",
        "SAVEHUB_DB": os.path.join(tempfile.mkdtemp(), "fresh.db")}  # fresh, non-existent DB => tests auto-create + seed
 proc = subprocess.Popen([sys.executable, "-m", "savehub.server"], cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 results = []
@@ -29,6 +29,7 @@ try:
             if httpx.get(BASE + "/healthz", timeout=1).status_code == 200: break
         except Exception: time.sleep(0.25)
     r = httpx.get(BASE + "/healthz"); check("GET /healthz", r.status_code == 200, f"{r.status_code} {r.text}")
+    check("/healthz reports the deployed commit (RENDER_GIT_COMMIT)", r.json().get("commit") == "0123456789ab", r.text)
     r = httpx.get(BASE + "/"); check("GET / dashboard html", r.status_code == 200 and "<title>SaveHub" in r.text, str(r.status_code))
     r = httpx.get(BASE + "/static/app.js"); check("GET /static/app.js", r.status_code == 200, str(r.status_code))
     j = httpx.get(BASE + "/api/health").json(); check("fresh DB auto-created + seeded", j["stats"]["items"] == 30 and j["stats"]["accounts"] == 7, json.dumps(j["stats"])[:80])

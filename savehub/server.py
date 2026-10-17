@@ -43,7 +43,8 @@ webapp.app.router.lifespan_context = lifespan
 @webapp.app.get("/healthz", include_in_schema=False)
 def healthz():
     db.conn().execute("SELECT 1")
-    return {"ok": True}
+    commit = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("SAVEHUB_COMMIT") or ""
+    return {"ok": True, **({"commit": commit[:12]} if commit else {})}   # deploy check: which git commit is live
 
 def _basic_ok(scope):
     return auth.basic_ok(dict(scope.get("headers") or []).get(b"authorization", b""))
