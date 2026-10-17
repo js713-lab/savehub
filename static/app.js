@@ -223,7 +223,7 @@ const vaultWarn = (compact) => VAULT.storage === 'persistent' ? '' : `<div class
   : 'Render’s free tier has no persistent disk, so the SQLite database — including every saved password — is wiped on each restart, redeploy or idle spin-down. Passwords only persist once a persistent disk (paid plan) is attached. Keep a copy in your password manager.'}</div></div>`;
 const vaultStrip = () => VAULT.enabled
   ? `<div class="vstrip on">${IC.shield}<span><b>Password vault on</b> · ${esc(VAULT.algorithm)} encryption at rest · ${VAULT.count} saved</span></div>${vaultWarn()}`
-  : `<div class="vstrip off">${IC.key}<span><b>Password vault off.</b> ${esc(VAULT.reason || '')}</span></div>`;
+  : `<div class="vstrip off">${IC.key}<span><b>Password vault off.</b> ${esc((VAULT.reason || '').replace(/^Password vault is off:\s*/i, ''))}</span></div>`;
 const pwRow = a => !a.has_password ? '' : `<div class="pwrow" data-pw="${a.id}">${IC.key}<span class="pwval" aria-live="polite">••••••••</span><span class="grow"></span>
   ${VAULT.enabled ? `<button type="button" class="btn ghost xs" data-act="reveal" data-id="${a.id}" aria-pressed="false" aria-label="Reveal password for ${esc(acctLabel(a))}">${IC.eye}<span>Reveal</span></button><button type="button" class="btn ghost xs" data-act="copypw" data-id="${a.id}" aria-label="Copy password for ${esc(acctLabel(a))}">Copy</button>`
     : `<span class="muted small" title="${esc(VAULT.reason || '')}">locked</span>`}</div>`;
@@ -735,8 +735,8 @@ async function viewConnect(params) {
   $('#view').innerHTML = `<h2>Connect apps</h2>
   <p class="muted">Choose which apps SaveHub collects from (toggle). Honest status: only <span class="method live_api">LIVE API</span> X has an official bookmarks API. Every other app has <b>no public API for your saved/favourite items</b>, so SaveHub imports their <b>official data-export files</b> or links you paste. On the box, the browser collector + auto-sync (see <a href="#/accounts">Accounts</a>) also picks up new saves from logged-in accounts.</p>
   <div class="grid">${PLATFORMS.map(p => `<div class="card">
-    <div class="row">${pbadge(p.id)}<span class="method ${p.method}">${p.method === 'live_api' ? 'LIVE API' : p.method === 'collector' ? 'ON-BOX COLLECTOR' : 'IMPORT'}</span><span style="flex:1"></span>
-      <label class="small row"><input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="togglePlatform('${p.id}', this.checked)"> enabled</label></div>
+    <div class="row">${pbadge(p.id)}<span class="method ${p.method}" title="${p.method === 'collector' ? 'Collected on the box by the SaveHub collector' : p.method === 'live_api' ? 'Official API' : 'Import export files or paste links'}">${p.method === 'live_api' ? 'LIVE API' : p.method === 'collector' ? 'ON-BOX' : 'IMPORT'}</span><span style="flex:1"></span>
+      <label class="small row" style="white-space:nowrap"><input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="togglePlatform('${p.id}', this.checked)"> enabled</label></div>
     <div class="small">${esc(p.detail)}</div><div class="muted small">${p.count} items in library</div>
     ${p.id === 'x' ? `<div class="small">Client ID: ${st.x.client_id_set ? '✔ set' : '✖ not set (Settings)'} · ${st.x.connected ? '✔ connected as @' + esc(st.x.user?.username || '') : 'not connected'}</div>
       <div class="row"><a class="btn small" href="/api/x/auth">Connect X (OAuth 2.0 PKCE)</a><button class="btn ghost small" onclick="xSync()">Sync bookmarks</button></div>`

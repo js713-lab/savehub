@@ -24,6 +24,21 @@ def broken_images(pg):
     return pg.evaluate("""() => [...document.images].filter(i => i.complete && i.naturalWidth === 0 && i.getAttribute('src')).map(i => i.getAttribute('src'))""")
 
 
+def overflowing(pg):
+    """Form controls / buttons that stick out of their panel or card, plus page-level horizontal scroll."""
+    return pg.evaluate("""() => {
+      const out = [];
+      if (document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)
+        out.push('page scrolls horizontally: ' + document.documentElement.scrollWidth + ' > ' + document.documentElement.clientWidth);
+      for (const el of document.querySelectorAll('#view .panel input, #view .panel select, #view .panel textarea, #view .panel .btn, #view .card input, #view .card select, #view .card .btn')) {
+        const box = el.closest('.panel, .card'); if (!box || !el.offsetParent) continue;
+        const r = el.getBoundingClientRect(), b = box.getBoundingClientRect();
+        if (r.right > b.right + 1 || r.left < b.left - 1) out.push((el.id || el.tagName.toLowerCase()) + ' overflows its ' + box.className.split(' ')[0]);
+      }
+      return out;
+    }""")
+
+
 def run_theme(b, theme):
     ctx = b.new_context(viewport={"width": 1366, "height": 900}, http_credentials={"username": AUTH[0], "password": AUTH[1]} if AUTH else None)
     ctx.add_init_script(f"localStorage.theme='{theme}';")
@@ -39,6 +54,10 @@ def run_theme(b, theme):
         check(f"[{theme}] {p}: theme applied", pg.evaluate("document.documentElement.dataset.theme") == theme)
         check(f"[{theme}] {p}: rendered (no error panel)", "Error:" not in pg.inner_text("#view")[:200], pg.inner_text("#view")[:120])
         bi = broken_images(pg); check(f"[{theme}] {p}: no broken images", not bi, str(bi[:5]))
+        for w in (1366, 1024):
+            pg.set_viewport_size({"width": w, "height": 900}); pg.wait_for_timeout(150)
+            ov = overflowing(pg); check(f"[{theme}] {p}: nothing overflows its panel at {w}px", not ov, str(ov[:5]))
+        pg.set_viewport_size({"width": 1366, "height": 900})
         pg.screenshot(path=str(OUT / f"{theme}_{p.replace('?', '_').replace('=', '')}.png"), full_page=True)
     # ---- library flows
     pg.goto(f"{BASE}/#/library"); pg.wait_for_selector("#results .card")

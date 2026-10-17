@@ -594,3 +594,10 @@ def test_login_terminal_cli(monkeypatch, tmp_path, capsys):
     monkeypatch.undo()
     assert cli.main(["login-terminal", "x", "--account", "@me", "--display", ":3"]) != 0
     assert "own browser window" in capsys.readouterr().out
+
+
+def test_icloud_connect_card_detail_does_not_repeat_login_commands():
+    # the Connect apps card prints the login / login-terminal commands itself; the detail text must not repeat them
+    from savehub import db
+    d = db.PLATFORMS["icloud"]["detail"]
+    assert "python -m" not in d and "never stored" in d
