@@ -85,7 +85,7 @@ kbd{font:11px ui-monospace,monospace;background:var(--panel2);border:1px solid v
 .adorn{display:flex;align-items:stretch;border:1px solid var(--border);border-radius:8px;background:var(--panel);overflow:hidden;transition:box-shadow .15s,border-color .15s}
 .adorn:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--ring)}.adorn input{border:0;flex:1;min-width:0;outline:none!important;background:transparent}
 .adorn .pre{display:grid;place-items:center;padding:0 10px;background:var(--panel2);color:var(--muted);font-weight:700;border-right:1px solid var(--border);font-size:13px}
-.tablewrap{overflow-x:auto;border-radius:12px;border:1px solid var(--border)}.atable{border:0;border-radius:0}.atable td{vertical-align:middle}.atable tbody tr{transition:background .12s}.atable tbody tr:hover{background:var(--panel2)}
+.tablewrap{overflow-x:auto;max-width:100%;border-radius:12px;border:1px solid var(--border)}.tablewrap>table{border:0;border-radius:0}.atable{border:0;border-radius:0}.atable td{vertical-align:middle}.atable tbody tr{transition:background .12s}.atable tbody tr:hover{background:var(--panel2)}
 .tplat{display:inline-flex;gap:7px;align-items:center;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}.tacct{display:flex;gap:10px;align-items:center}.tacct .avatar{width:32px;height:32px;font-size:12px}.tacct .avatar .pdot{width:11px;height:11px}
 .tacts{white-space:nowrap;text-align:right}.atable tr.editing td{padding:10px}.atable tr.editing .acard{max-width:520px}
 .empty{text-align:center;padding:48px 20px;background:var(--panel);border:1px dashed var(--border);border-radius:18px;animation:fadeup .3s ease both}
@@ -134,6 +134,7 @@ code{font:12px ui-monospace,monospace;background:var(--panel2);padding:0 4px;bor
   .acct-head{align-items:stretch}.acct-actions{width:100%}.acct-actions .btn{flex:1;justify-content:center}.acct-actions .btn.big{flex:1 1 100%}
   .acct-tools .seg span{display:none}.searchwrap{min-width:100%}.searchwrap kbd{display:none}
   .agrid{grid-template-columns:1fr}.ptiles{grid-template-columns:repeat(2,1fr)}
+  .agroup-h{flex-wrap:wrap;row-gap:6px}.agroup-h h3{min-width:0}.agroup-h .bkpick{order:9;flex:1 1 100%}.agroup-h .bkpick select{flex:1;min-width:0}
   .modal{align-items:flex-end;padding:0}.modal-card,.modal-card.wide{width:100%;max-height:92vh;border-radius:18px 18px 0 0;transform:translateY(40px)}
   .am-foot .btn{flex:1;justify-content:center}.kbdhint{display:none}.toast{left:12px;right:12px;bottom:12px;max-width:none}
 }

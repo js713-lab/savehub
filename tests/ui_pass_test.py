@@ -63,7 +63,7 @@ def run_theme(b, theme):
         check(f"[{theme}] {p}: theme applied", pg.evaluate("document.documentElement.dataset.theme") == theme)
         check(f"[{theme}] {p}: rendered (no error panel)", "Error:" not in pg.inner_text("#view")[:200], pg.inner_text("#view")[:120])
         bi = broken_images(pg); check(f"[{theme}] {p}: no broken images", not bi, str(bi[:5]))
-        for w in (1366, 1024):
+        for w in (1366, 1024, 390):
             pg.set_viewport_size({"width": w, "height": 900}); pg.wait_for_timeout(150)
             ov = overflowing(pg); check(f"[{theme}] {p}: nothing overflows its panel at {w}px", not ov, str(ov[:5]))
             if p == "connect":
@@ -99,6 +99,9 @@ def run_theme(b, theme):
     pg.click("#vt"); pg.wait_for_timeout(500); check(f"[{theme}] table view", pg.locator("#results table tr").count() > 1)
     pg.locator("#results th").first.click(); pg.wait_for_timeout(500); check(f"[{theme}] table header sort", "↓" in pg.inner_text("#results thead") or "↑" in pg.inner_text("#results thead"))
     pg.screenshot(path=str(OUT / f"{theme}_library_table.png"))
+    pg.set_viewport_size({"width": 390, "height": 844}); pg.wait_for_timeout(200)
+    ov = overflowing(pg); check(f"[{theme}] library table view does not scroll the page sideways at 390px", not ov, str(ov[:5]))
+    pg.set_viewport_size({"width": 1366, "height": 900}); pg.wait_for_timeout(150)
     pg.click("#vt"); pg.wait_for_timeout(500); check(f"[{theme}] card view", pg.locator("#results .card").count() > 0)
     pg.select_option("#acct", index=1); pg.wait_for_timeout(500); check(f"[{theme}] account filter", pg.locator("#count").inner_text() != "")
     pg.select_option("#acct", index=0); pg.wait_for_timeout(400)

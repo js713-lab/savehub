@@ -100,8 +100,8 @@ async function loadItems() {
       <div class="tags">${tagsHtml(i)}</div>
       <div class="foot"><span>Saved ${fdate(i.saved_at)}${i.account_name ? ' · via ' + esc(i.account_name) : ''}</span><span><a href="#" onclick="itemModal(${i.id});return false">details</a></span></div>
     </div>`).join('')}</div>`;
-  else el.innerHTML = `<table><thead><tr>${[['title','Title'],['platform','Platform'],['author','Author'],['', 'Tags'],['', 'Account'],['saved_at','Saved']].map(([k,l]) => `<th ${k?`onclick="L.sort='${k}';L.order=L.order==='desc'?'asc':'desc';viewLibrary(new URLSearchParams())"`:''}>${l}${L.sort===k?(L.order==='desc'?' ↓':' ↑'):''}</th>`).join('')}</tr></thead><tbody>
-    ${r.items.map(i => `<tr><td><a href="${esc(safeUrl(i.url)||'#')}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a> ${i.is_sample?'<span class="sample">SAMPLE</span>':''}<div class="muted small">${esc(i.summary||'')}</div></td><td>${pbadge(i.platform)}</td><td>${esc(i.author||'')}</td><td>${tagsHtml(i)}</td><td class="small">${esc(i.account_name||'')}</td><td class="small">${fdate(i.saved_at)}</td></tr>`).join('')}</tbody></table>`;
+  else el.innerHTML = `<div class="tablewrap"><table><thead><tr>${[['title','Title'],['platform','Platform'],['author','Author'],['', 'Tags'],['', 'Account'],['saved_at','Saved']].map(([k,l]) => `<th ${k?`onclick="L.sort='${k}';L.order=L.order==='desc'?'asc':'desc';viewLibrary(new URLSearchParams())"`:''}>${l}${L.sort===k?(L.order==='desc'?' ↓':' ↑'):''}</th>`).join('')}</tr></thead><tbody>
+    ${r.items.map(i => `<tr><td><a href="${esc(safeUrl(i.url)||'#')}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a> ${i.is_sample?'<span class="sample">SAMPLE</span>':''}<div class="muted small">${esc(i.summary||'')}</div></td><td>${pbadge(i.platform)}</td><td>${esc(i.author||'')}</td><td>${tagsHtml(i)}</td><td class="small">${esc(i.account_name||'')}</td><td class="small">${fdate(i.saved_at)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 async function retagAll() { toast('Tagging…'); const r = await jpost('/api/tag', {force: true}); toast(`Re-tagged ${r.retagged} items with ${r.provider.active}`); viewLibrary(new URLSearchParams()); }
 async function itemModal(id) {
@@ -712,8 +712,8 @@ async function viewContacts() {
     <div class="toolbar"><input class="search" id="cq" placeholder="Search contacts by name, phone, email, org…"><select id="cacct">${accountOptions('')}</select></div><div id="ctable"></div>`;
   const load = async () => {
     const r = await api('/api/contacts?' + new URLSearchParams({q: $('#cq').value, account_id: $('#cacct').value}));
-    $('#ctable').innerHTML = `<div class="muted small" style="margin-bottom:6px">${r.total} contacts</div><table><thead><tr><th>Name</th><th>Phones</th><th>Emails</th><th>Org</th><th>Platform</th><th>Account</th><th></th></tr></thead><tbody>
-      ${r.contacts.map(c => `<tr><td><b>${esc(c.name)}</b> ${c.is_sample?'<span class="sample">SAMPLE</span>':''}</td><td class="small">${c.phones.map(esc).join('<br>')}</td><td class="small">${c.emails.map(esc).join('<br>')}</td><td>${esc(c.org||'')}</td><td>${c.platform?pbadge(c.platform):''}</td><td class="small">${esc(c.account_name||'')}</td><td><button class="btn ghost small" onclick="delContact(${c.id})">✕</button></td></tr>`).join('')}</tbody></table>`;
+    $('#ctable').innerHTML = `<div class="muted small" style="margin-bottom:6px">${r.total} contacts</div><div class="tablewrap"><table class="ctable"><thead><tr><th>Name</th><th>Phones</th><th>Emails</th><th>Org</th><th>Platform</th><th>Account</th><th></th></tr></thead><tbody>
+      ${r.contacts.map(c => `<tr><td><b>${esc(c.name)}</b> ${c.is_sample?'<span class="sample">SAMPLE</span>':''}</td><td class="small">${c.phones.map(esc).join('<br>')}</td><td class="small">${c.emails.map(esc).join('<br>')}</td><td>${esc(c.org||'')}</td><td>${c.platform?pbadge(c.platform):''}</td><td class="small">${esc(c.account_name||'')}</td><td><button class="btn ghost small" onclick="delContact(${c.id})" aria-label="Delete contact ${esc(c.name)}">✕</button></td></tr>`).join('')}</tbody></table></div>`;
   };
   window._loadContacts = load; let t; $('#cq').oninput = () => { clearTimeout(t); t = setTimeout(load, 200); }; $('#cacct').onchange = load; load();
 }
