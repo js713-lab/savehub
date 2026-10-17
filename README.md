@@ -151,7 +151,22 @@ against the live Render site as well as a local server. `--sink sqlite --db path
 | Platform | Collector |
 |---|---|
 | X (Twitter) | ✅ `x.com/i/bookmarks`: author, @handle, text (emoji kept), permalink, post time, media flag/first image, repost/quote context; de-duped by tweet id; optional un-bookmark |
-| Instagram, Threads, Facebook, TikTok, 抖音, 小红书, WeChat, WhatsApp, Messenger | ⏳ stubs (`savehub/collector/platforms/stubs.py`) that raise a clear *not implemented* error. Each has TODO notes on its saved-items URL and selectors. `python -m savehub.collector platforms` lists them |
+| Threads | ✅ saves: `threads.com/saved`. JSON first (post objects in `/graphql`/`/api/graphql` responses + embedded script JSON), DOM fallback on `/@user/post/<code>` permalinks; quoted posts kept out; un-save via the post's `…` menu → *Unsave* |
+| Instagram | ✅ saves: `/<user>/saved/all-posts/` **plus every collection** (items get `extra.collections`). Username = `--account`, else the nav profile link. JSON first (`/api/v1/feed/saved`, graphql media objects), DOM fallback on `/p\|reel/<code>` grid links; un-save = post-page bookmark toggle (`Remove` → `Save`) |
+| TikTok | ✅ saves: profile **Favorites** tab (videos + photo posts). JSON first (`/api/user/collect/item_list/`), DOM via `data-e2e`; the profile's own videos are never collected; un-favorite = video-page favorite toggle (`aria-pressed`) |
+| 小红书 RED | ✅ saves: profile **收藏** tab (`?tab=fav`). JSON first (`/api/sns/web/v2/note/collect/page`), DOM fallback (`section.note-item`, 24-hex note links); `xsec_token` kept in `extra`; un-collect = note-page `.collect-wrapper` toggle |
+| 抖音 Douyin | ✅ saves: `/user/self?showTab=favorite_collection`. JSON first (`aweme_list` from `/aweme/v1/web/aweme/listcollection/`), DOM fallback on `/video\|note/<id>`; un-collect = `[data-e2e=video-player-collect]` state toggle |
+| Facebook | ✅ saves: `facebook.com/saved/` (posts, links, videos…). Role/aria/text-only DOM (one entry per *More* button), `l.php` links decoded, tracking params dropped; un-save = entry *More* → *Unsave* |
+| Messenger | ✅ **contacts** (no saved-posts view exists): every conversation in the chat list (name, thread URL, avatar, last-message preview in `extra`). No un-save |
+| WhatsApp | ✅ **contacts**: WhatsApp Web's IndexedDB address book + chats (`https://wa.me/<number>`, groups), chat-list DOM fallback, plus **starred messages** (best effort). Session file includes IndexedDB (Playwright ≥ 1.51). No un-save/un-star |
+| WeChat | ❌ stub on purpose: no usable web client (web WeChat refuses most accounts and never showed 收藏/contacts; the desktop app is native, not automatable with Playwright). Use the paste/CSV/JSON importer |
+
+Contact items use the same schema/sink as saves (`title` = name, `extra.kind` = `contact` / `group` / `chat` / `starred_message`).
+Every non-X collector is built on `savehub/collector/platforms/_common.py` (`FeedCollector`): DOM extraction + XHR JSON
+captured with `page.on('response')` + embedded `<script type="application/json">`, merged and de-duplicated by id, `max_items`,
+idle/scroll stops, opt-in verified un-save. Selectors live in each module's `SEL` dict; fixtures in `tests/fixtures/<platform>_*`
+and `tests/collector_platforms_test.py`. **These selectors were written without a live login** (only X was verified on the
+real site): expect to adjust a selector or two on first real run — the JSON paths are the more stable part.
 
 **Install** (kept out of `requirements.txt` so the Render image stays slim):
 ```bash
@@ -194,7 +209,7 @@ Exit codes: `0` ok · `1` error · **`2` need login** (no session or it expired;
 **3. Un-save safety (OFF by default):**
 - No flag: nothing on the app is touched.
 - `--unsave`: **dry run**. It logs and lists each item it *would* un-bookmark and never opens or clicks them.
-- `--unsave --unsave-confirm`: actually un-bookmarks. `--unsave-confirm` alone is refused, and `--no-push` with `--unsave` is refused.
+- `--unsave --unsave-confirm`: actually un-bookmarks / un-saves. Contact collectors (Messenger, WhatsApp) refuse `--unsave`. `--unsave-confirm` alone is refused, and `--no-push` with `--unsave` is refused.
 - An item is un-saved only after SaveHub confirms it (POST, then a read-back of the same platform+URL). Failed pushes are never un-saved.
 - At most `--max-unsave` (default 50) real un-saves per run, `unsave_delay` 2.5 s apart. Each one is verified (the bookmark toggle flips, or the Share menu no longer offers “Remove from Bookmarks”).
 
@@ -211,6 +226,6 @@ Exit codes: `0` ok · `1` error · **`2` need login** (no session or it expired;
   top-level `collector_runtime` (is a browser available here).
 No MCP tool takes or returns passwords, cookies or session contents.
 
-**Fragility:** this scrapes the web UI. When X changes its markup, selectors break. They all live in `SEL` in
-`savehub/collector/platforms/x.py`, and `tests/fixtures/x_bookmarks.html` mirrors the expected DOM. Automated use may hit
+**Fragility:** this scrapes the web UI. When an app changes its markup, selectors break. They all live in `SEL` in
+`savehub/collector/platforms/<module>.py` (x, meta, bytedance, xiaohongshu, facebook, contacts), and `tests/fixtures/` mirrors the expected DOM/JSON. Automated use may hit
 rate limits, captchas or account checks. Keep runs small and infrequent, and use your own account only, at your own risk under the app's terms.

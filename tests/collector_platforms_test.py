@@ -353,3 +353,109 @@ def test_xiaohongshu_login_and_unsave(browser, tmp_path):
     finally: ctx.close()
     unsave_cycle(browser, tmp_path, f, "xiaohongshu", ".xiaohongshu.com", XHS_IDS[:2])
     assert any("tok=ABtokA1" in r for r in f.requests)                                                # opened with its xsec_token
+
+
+# ====================================================================== Facebook
+def fb_fake():
+    f = Fake({"www.facebook.com", "facebook.com"}, [], r"^/login", "facebook_login.html", "https://www.facebook.com/login/?next=%2Fsaved%2F")
+    f.pages = [(r"^/saved/$", lambda m, f, r: fx("facebook_saved.html"))]
+    return f
+
+
+def test_facebook_collect(browser):
+    items = collect(browser, fb_fake(), "facebook")
+    assert [i.url for i in items] == ["https://www.facebook.com/AdaPage/posts/pfbid0ABC", "https://example.com/nasi-lemak?id=7",
+                                      "https://www.facebook.com/watch/?v=999000111"]
+    a, n, v = items
+    assert a.title == "Ada's post about kopi" and a.author == "Ada Page" and a.extra["kind"] == "Post" and a.media_url.endswith("s1.jpg")
+    assert a.extra["saved_from_url"] == "https://www.facebook.com/AdaPage/posts/pfbid0ABC" and "idx" not in a.extra
+    assert n.title == "The best nasi lemak in KL" and n.author == "Foodie Group" and n.extra["kind"] == "Link"
+    assert v.extra["video"] and v.author == "Satay King" and v.has_media
+    assert len({i.external_id for i in items}) == 3 and a.to_savehub()["title"] == "Ada's post about kopi"
+    assert len(collect(browser, fb_fake(), "facebook", max_items=2)) == 2
+
+
+def test_facebook_login_and_unsave(browser, tmp_path):
+    f = fb_fake()
+    assert_need_login(browser, tmp_path, f, "facebook", ".facebook.com", "/login")
+    ctx = runner.new_context(browser); pg = ctx.new_page(); col = get_collector("facebook")
+    try:
+        pg.set_content(fx("facebook_login.html")); assert col.is_login_page(pg) and not col.is_logged_in(pg)
+        pg.set_content(fx("facebook_saved.html")); assert col.is_logged_in(pg) and not col.is_login_page(pg)
+    finally: ctx.close()
+    unsave_cycle(browser, tmp_path, f, "facebook", ".facebook.com", ["0", "1"])
+
+
+# ====================================================================== Messenger (contacts)
+def ms_fake():
+    f = Fake({"www.messenger.com", "messenger.com"}, [], r"^/login", "messenger_login.html", "https://www.messenger.com/login/")
+    f.pages = [(r"^/$", lambda m, f, r: fx("messenger_chats.html"))]
+    return f
+
+
+def test_messenger_contacts(browser, tmp_path):
+    items = collect(browser, ms_fake(), "messenger")
+    assert [i.url for i in items] == ["https://www.messenger.com/t/100001/", "https://www.messenger.com/e2ee/t/7000123/",
+                                      "https://www.messenger.com/t/ben.tan/", "https://www.messenger.com/t/100004/"]
+    a, g, b, c = items
+    assert a.title == "Ada Lim" and a.extra == {"kind": "contact", "thread_id": "100001", "last_message": "You: see you at 8 · 2h"}
+    assert g.title == "Kopi Gang 🇲🇾" and g.extra["e2ee"] and g.extra["unread"]
+    p = a.to_savehub(); assert p["title"] == "Ada Lim" and p["platform"] == "messenger" and p["content"] == ""
+    assert len(collect(browser, ms_fake(), "messenger", max_items=2)) == 2
+    col = get_collector("messenger"); assert col.kind == "contacts" and not col.supports_unsave and col.describe()["supports_unsave"] is False
+    f = ms_fake(); sd = sessdir_for(tmp_path, "messenger", ".messenger.com")
+    with pytest.raises(CollectorError, match="no un-save action"):
+        runner.run_collect("messenger", RunConfig(**FAST, unsave=True), OkSink(), sd, browser=browser, context_hook=f.hook)
+    assert f.requests == []                                                                       # refused before any browsing
+    assert_need_login(browser, tmp_path, f, "messenger", ".messenger.com", "/login")
+
+
+# ====================================================================== WhatsApp (contacts + starred)
+def wa_fake(idb=True):
+    f = Fake({"web.whatsapp.com"}, [], r"^/__never", "whatsapp_qr.html", None)
+    f.pages = [(r"^/$", lambda m, f, r: fx("whatsapp_web.html").replace("{{IDB}}", "true" if idb else "false"))]
+    return f
+
+
+def test_whatsapp_contacts_idb_dom_and_starred(browser):
+    items = collect(browser, wa_fake(), "whatsapp")
+    by = {i.url: i for i in items}
+    assert set(by) == {"https://wa.me/60120000001", "https://wa.me/60120000002", "https://web.whatsapp.com/#group/120363000000000001@g.us",
+                       "https://wa.me/60120000003", "https://web.whatsapp.com/#chat/Mum%20%E2%9D%A4%EF%B8%8F"} | \
+                      {u for u in by if u.startswith("https://web.whatsapp.com/#starred/")}
+    ada = by["https://wa.me/60120000001"]
+    assert ada.title == "Ada Lim" and ada.extra["phone"] == "+60120000001" and ada.extra["in_address_book"] and ada.extra["unread"] == 2
+    assert ada.extra["last_chat_at"] == "2025-10-09T08:53:20+00:00" and ada.extra["kind"] == "contact"
+    assert by["https://wa.me/60120000002"].title == "Ben T" and by["https://wa.me/60120000002"].extra["business"]
+    assert by["https://web.whatsapp.com/#group/120363000000000001@g.us"].title == "Kopi Gang"
+    assert by["https://wa.me/60120000003"].extra["last_message"] == "hello"                          # DOM-only phone row
+    starred = [i for i in items if i.extra.get("kind") == "starred_message"]
+    assert sorted(s.text for s in starred) == ["Meet at Jalan Alor, 8pm", "Wifi password is kopi-1234"]
+    assert {s.extra["chat"] for s in starred} == {"Ada Lim > You", "Kopi Gang"} and all(s.extra.get("meta") for s in starred)
+    assert len(items) == 7
+
+
+def test_whatsapp_dom_fallback_login_and_session_idb(browser, tmp_path):
+    items = collect(browser, wa_fake(idb=False), "whatsapp", max_items=3)
+    assert [i.title for i in items] == ["Ada Lim", "Kopi Gang", "+60 12-000 0003"] and items[1].extra["kind"] == "group"
+    assert items[0].url == "https://web.whatsapp.com/#chat/Ada%20Lim" and items[2].url == "https://wa.me/60120000003"
+    col = get_collector("whatsapp")
+    assert col.needs_indexed_db and col.kind == "contacts"
+    f = wa_fake(); assert_need_login(browser, tmp_path, f, "whatsapp", "web.whatsapp.com", "")
+    ctx = runner.new_context(browser); pg = ctx.new_page()
+    try:
+        pg.set_content(fx("whatsapp_qr.html")); assert col.is_login_page(pg) and not col.is_logged_in(pg)
+    finally: ctx.close()
+    # the run saves IndexedDB into the session file (WhatsApp's login keys live there)
+    sd = sessdir_for(tmp_path, "whatsapp", "web.whatsapp.com")
+    runner.run_collect("whatsapp", RunConfig(**FAST, max_items=2), None, sd, browser=browser, context_hook=wa_fake().hook)
+    st = json.loads((sd / "whatsapp.json").read_text())
+    dbs = [d["name"] for o in st["origins"] for d in o.get("indexedDB", [])]
+    assert "model-storage" in dbs
+
+
+def test_wechat_stays_stub_with_reason():
+    c = get_collector("wechat")
+    assert not c.implemented and "no usable web client" in c.notes
+    impl = sorted(k for k, v in REGISTRY.items() if v.implemented)
+    assert impl == ["douyin", "facebook", "instagram", "messenger", "threads", "tiktok", "whatsapp", "x", "xiaohongshu"]

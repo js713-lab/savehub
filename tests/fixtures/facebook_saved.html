@@ -1,0 +1,24 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Saved | Facebook</title><style>.e{min-height:700px}</style></head><body>
+<!-- Synthetic facebook.com/saved (2026): obfuscated classes replaced by meaningless ones; only role/aria/text are real contracts. Fictional. -->
+<div role="banner"><div aria-label="Account controls and settings" role="navigation"><div aria-label="Your profile" role="button"><img src="https://scontent.xx.fbcdn.net/me.jpg"></div></div></div>
+<div role="navigation" aria-label="Saved"><a href="/saved/">Saved items</a><a href="/saved/?list_id=111">My collection</a></div>
+<div role="main"><h1>All</h1><div id="list"></div></div>
+<div id="menu"></div>
+<script>
+const E = [
+ {href:"https://www.facebook.com/AdaPage/posts/pfbid0ABC?__cft__[0]=AZX&__tn__=%2CO%2CP-R", t:"Ada's post about kopi", meta:"Post · Saved from ", src:"Ada Page's post", srcHref:"/AdaPage/posts/pfbid0ABC?__cft__[0]=x", img:"https://scontent.xx.fbcdn.net/s1.jpg"},
+ {href:"https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2Fnasi-lemak%3Futm_source%3Dfb%26id%3D7%26fbclid%3DIwAR0&h=AT0", t:"The best nasi lemak in KL", meta:"Link · Saved from ", src:"Foodie Group", srcHref:"/groups/foodie/", img:"https://external.xx.fbcdn.net/s2.jpg"},
+ {href:"/watch/?v=999000111&__tn__=x", t:"Satay grilling video", meta:"Video · Saved from ", src:"Satay King's video", srcHref:"/sataying/", video:true},
+];
+function entry(e, i){ return `<div class="x1 e"><div class="x2"><a href="${e.href}"><img src="${e.img||""}"></a></div><div class="x3">
+  <a href="${e.href}" role="link"><span dir="auto">${e.t}</span></a><div><span>${e.meta}<a href="${e.srcHref}">${e.src}</a></span></div>
+  <div class="x4"><div role="button"><span>Add to Collection</span></div><div role="button" aria-label="More" data-i="${i}" class="more"><svg></svg></div></div></div>${e.video?'<div aria-label="Play video"></div>':""}</div>`; }
+let shown = 0; const removed = new Set();
+function render(){ document.getElementById("list").innerHTML = E.slice(0, shown).map((e, i) => removed.has(i) ? "" : entry(e, i)).join(""); }
+function more(){ if (shown < E.length) { shown += 2; if (shown > E.length) shown = E.length; render(); } }
+document.addEventListener("click", (ev) => { const m = ev.target.closest(".more"); if (m) { const i = +m.dataset.i;
+  document.getElementById("menu").innerHTML = `<div role="menu"><div role="menuitem" id="un">Unsave</div><div role="menuitem">Share</div></div>`;
+  document.getElementById("un").onclick = () => { removed.add(i); fetch("/__test/unsave?id=" + i); document.getElementById("menu").innerHTML = ""; render(); }; } });
+document.addEventListener("keydown", e => { if (e.key === "Escape") document.getElementById("menu").innerHTML = ""; });
+more(); window.addEventListener("scroll", () => { if (window.innerHeight + window.scrollY > document.body.scrollHeight - 200) more(); });
+</script></body></html>

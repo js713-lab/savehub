@@ -1,0 +1,35 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>WhatsApp</title><style>#pane-side{height:400px;overflow-y:auto} [role="listitem"]{height:250px}</style></head><body>
+<!-- Synthetic web.whatsapp.com (2026). ?idb=1 seeds IndexedDB 'model-storage' like WhatsApp Web does. Fictional numbers (+60 12-000 xxxx). -->
+<div id="app"><header><div role="button" aria-label="Menu"><span data-icon="menu">⋮</span></div></header>
+<div id="side"><div id="pane-side" aria-label="Chat list" role="grid"><div id="rows"></div></div></div><div id="drawer"></div><div id="menu"></div></div>
+<script>
+const ROWS = [
+ {n:"Ada Lim", p:"see you at 8", img:"https://pps.whatsapp.net/a.jpg"},
+ {n:"Kopi Gang", p:"Ben: who's buying?", group:true},
+ {n:"+60 12-000 0003", p:"hello"},
+ {n:"Ada Lim", p:"see you at 8"},
+ {n:"Mum ❤️", p:"Call me"},
+];
+let shown = 0;
+function more(){ const r = document.getElementById("rows"); for (let i = 0; i < 2 && shown < ROWS.length; i++, shown++) { const c = ROWS[shown];
+  r.insertAdjacentHTML("beforeend", `<div role="listitem"><img src="${c.img||""}">${c.group?'<span data-icon="default-group"></span>':""}<span dir="auto" title="${c.n}">${c.n}</span><span title="${c.p}">${c.p}</span></div>`); } }
+more(); const ps = document.getElementById("pane-side"); ps.addEventListener("scroll", () => { if (ps.scrollTop + ps.clientHeight > ps.scrollHeight - 50) more(); });
+document.querySelector('[aria-label="Menu"]').addEventListener("click", () => {
+  document.getElementById("menu").innerHTML = '<ul role="application"><li><div role="button" aria-label="New group">New group</div></li><li><div role="button" aria-label="Starred messages">Starred messages</div></li></ul>';
+  document.querySelector('[aria-label="Starred messages"]').onclick = () => { document.getElementById("menu").innerHTML = "";
+    document.getElementById("drawer").innerHTML = `<div><header><div title="Starred messages">Starred messages</div></header><div class="list">
+      <div role="listitem"><span title="Ada Lim">Ada Lim</span><span title="You">You</span><div data-pre-plain-text="[09:15, 10/10/2026] Ada Lim: "><span class="selectable-text">Wifi password is kopi-1234</span></div></div>
+      <div role="listitem"><span title="Kopi Gang">Kopi Gang</span><div data-pre-plain-text="[20:01, 11/10/2026] Ben: "><span class="selectable-text">Meet at Jalan Alor, 8pm</span></div></div></div></div>`; }; });
+if (new URLSearchParams(location.search).get("idb") === "1" || {{IDB}}) {
+  const req = indexedDB.open("model-storage", 1);
+  req.onupgradeneeded = () => { const db = req.result; for (const s of ["contact", "chat", "group-metadata"]) db.createObjectStore(s, {keyPath: "id"}); };
+  req.onsuccess = () => { const db = req.result; const tx = db.transaction(["contact", "chat", "group-metadata"], "readwrite");
+    tx.objectStore("contact").put({id: "60120000001@c.us", name: "Ada Lim", shortName: "Ada", pushname: "ada", isAddressBookContact: true});
+    tx.objectStore("contact").put({id: "60120000002@c.us", name: "", pushname: "Ben T", isBusiness: true});
+    tx.objectStore("contact").put({id: "status@broadcast", name: ""});
+    tx.objectStore("chat").put({id: "60120000001@c.us", t: 1760000000, unreadCount: 2});
+    tx.objectStore("chat").put({id: "120363000000000001@g.us", name: "Kopi Gang", t: 1760100000});
+    tx.objectStore("group-metadata").put({id: "120363000000000001@g.us", subject: "Kopi Gang"});
+    tx.oncomplete = () => { db.close(); window.__idbReady = true; }; };
+}
+</script></body></html>

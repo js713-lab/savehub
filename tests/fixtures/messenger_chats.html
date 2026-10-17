@@ -1,0 +1,17 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Messenger</title><style>#scroller{height:500px;overflow-y:auto} a{display:block;height:180px}</style></head><body>
+<!-- Synthetic messenger.com chat list (2026): role/aria contracts only. Fictional people. -->
+<div role="navigation" aria-label="Chats"><div aria-label="New message" role="button"></div><div id="scroller"><div id="rows" role="grid"></div></div></div>
+<div role="main">conversation</div>
+<script>
+const C = [
+ {h:"/t/100001/", n:"Ada Lim", p:"You: see you at 8 · 2h", img:"https://scontent.xx.fbcdn.net/a.jpg"},
+ {h:"/e2ee/t/7000123/", n:"Kopi Gang 🇲🇾", p:"Ben: who's buying? · 1d", unread:true},
+ {h:"/t/ben.tan/", n:"Ben Tan", p:"Sticker · 3d"},
+ {h:"/t/100001/", n:"Ada Lim", p:"You: see you at 8 · 2h"},
+ {h:"/t/100004/", n:"Chen Wei", p:"Thanks! · 1w"},
+];
+let shown = 0;
+function more(){ const r = document.getElementById("rows"); for (let i = 0; i < 3 && shown < C.length; i++, shown++) { const c = C[shown];
+  r.insertAdjacentHTML("beforeend", `<div role="row"><a href="${c.h}" role="link"><img src="${c.img||""}"><span dir="auto"><span dir="auto">${c.n}</span></span><span dir="auto">${c.p}</span>${c.unread?'<div aria-label="Mark as read"></div>':""}</a></div>`); } }
+more(); const s = document.getElementById("scroller"); s.addEventListener("scroll", () => { if (s.scrollTop + s.clientHeight > s.scrollHeight - 100) more(); });
+</script></body></html>
