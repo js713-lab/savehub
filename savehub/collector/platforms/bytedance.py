@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging, re
 from ..base import CollectorError, RunConfig, register
 from ..logutil import ev
-from ._common import FeedCollector, dig, first_url, iso_from_epoch, raw, walk
+from ._common import FeedCollector, dig, first_url, iso_from_epoch, raw, walk, urls_of
 
 # ====================================================================== TikTok
 TT_SEL = {
@@ -76,7 +76,7 @@ class TikTokCollector(FeedCollector):
         extra = {"photo": True} if kind == "photo" else {"video": True}
         if r.get("views"): extra["views"] = r["views"]
         return raw(vid, f"https://www.tiktok.com/@{handle}/{kind}/{vid}", handle=handle, text=r.get("desc") or r.get("alt") or "",
-                   media_url=r.get("media_url") or "", has_media=True, extra=extra)
+                   media_url=r.get("media_url") or "", has_media=True, extra=extra, type=kind, aspect=0.5625 if kind == "video" else None)
 
     def json_raws(self, obj):
         out = []
@@ -88,9 +88,15 @@ class TikTokCollector(FeedCollector):
                               dig(d, "imagePost", "cover", "imageURL", "urlList"), dig(d, "imagePost", "images", 0, "imageURL", "urlList"))
             extra = {"photo": True} if photo else {"video": True}
             if dig(d, "music", "title"): extra["music"] = dig(d, "music", "title")
+            imgs = urls_of(dig(d, "imagePost", "images", default=[])) if photo else []
+            vw, vh = dig(d, "video", "width", default=0), dig(d, "video", "height", default=0)
             out.append(raw(d["id"], f"https://www.tiktok.com/@{handle or 'i'}/{kind}/{d['id']}", author=dig(d, "author", "nickname") or "",
                            handle=handle, text=d.get("desc") or "", posted_at=iso_from_epoch(d.get("createTime")),
-                           media_url=cover, has_media=True, extra=extra))
+                           media_url=cover, has_media=True, extra=extra, type=kind, images=imgs or None,
+                           video_url=None if photo else (first_url(dig(d, "video", "playAddr"), dig(d, "video", "downloadAddr")) or None),
+                           duration=None if photo else (dig(d, "video", "duration") or None),
+                           aspect=round(vw / vh, 4) if not photo and vw and vh else None,
+                           avatar=first_url(dig(d, "author", "avatarThumb"), dig(d, "author", "avatarMedium")) or None))
         return out
 
     def resolve_username(self, page, cfg, session_file=""):
@@ -174,7 +180,8 @@ class DouyinCollector(FeedCollector):
         if not m: return None
         kind, vid = m.groups()
         return raw(vid, f"https://www.douyin.com/{kind}/{vid}", text=r.get("title") or r.get("alt") or "",
-                   media_url=r.get("media_url") or "", has_media=True, extra={"note": True} if kind == "note" else {"video": True})
+                   media_url=r.get("media_url") or "", has_media=True, extra={"note": True} if kind == "note" else {"video": True},
+                   type="note" if kind == "note" else "video", aspect=None if kind == "note" else 0.5625)
 
     def json_raws(self, obj):
         out = []
@@ -185,9 +192,16 @@ class DouyinCollector(FeedCollector):
                               dig(d, "images", 0, "url_list"))
             extra = {"note": True} if note else {"video": True}
             if dig(d, "author", "sec_uid"): extra["author_sec_uid"] = dig(d, "author", "sec_uid")
+            dur = dig(d, "video", "duration", default=0) or d.get("duration") or 0     # Douyin reports milliseconds
+            vw, vh = dig(d, "video", "width", default=0), dig(d, "video", "height", default=0)
             out.append(raw(vid, f"https://www.douyin.com/{'note' if note else 'video'}/{vid}", author=dig(d, "author", "nickname") or "",
                            handle=str(dig(d, "author", "unique_id") or dig(d, "author", "short_id") or ""), text=d.get("desc") or "",
-                           posted_at=iso_from_epoch(d.get("create_time")), media_url=cover, has_media=True, extra=extra))
+                           posted_at=iso_from_epoch(d.get("create_time")), media_url=cover, has_media=True, extra=extra,
+                           type="note" if note else "video", images=urls_of(d.get("images") or []) or None if note else None,
+                           video_url=None if note else (first_url(dig(d, "video", "play_addr", "url_list")) or None),
+                           duration=(dur / 1000 if dur > 1000 else dur) or None if not note else None,
+                           aspect=round(vw / vh, 4) if not note and vw and vh else None,
+                           avatar=first_url(dig(d, "author", "avatar_thumb", "url_list")) or None))
         return out
 
     def after_open(self, page, cfg, label):

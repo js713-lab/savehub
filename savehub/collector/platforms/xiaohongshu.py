@@ -12,7 +12,7 @@ import logging, re
 from urllib.parse import parse_qs, urlparse
 from ..base import CollectorError, RunConfig, register
 from ..logutil import ev
-from ._common import FeedCollector, dig, first_url, raw, walk
+from ._common import FeedCollector, dig, first_url, raw, urls_of, walk
 
 XHS_SEL = {
     "item": 'section.note-item, a[href*="/explore/"]',
@@ -43,6 +43,7 @@ XHS_EXTRACT_JS = r"""
     const img = c.querySelector('img:not(.author-avatar):not([class*="avatar"])');
     out.push({href: note, author: author ? (author.innerText || author.textContent || '').trim() : '', author_href: authorA,
               title: title ? (title.innerText || title.textContent || '').trim() : '', media_url: img ? (img.getAttribute('src') || '') : '',
+              avatar: ((c.querySelector('img.author-avatar, .author img, [class*="avatar"] img, img[class*="avatar"]') || {}).src || ''),
               video: !!c.querySelector('.play-icon, [class*="play"]'), likes: ((c.querySelector('.like-wrapper .count, .count') || {}).textContent || '').trim()});
   }
   return out;
@@ -90,7 +91,8 @@ class XiaohongshuCollector(FeedCollector):
         if um: extra["author_user_id"] = um.group(1)
         title = r.get("title") or ""
         return raw(nid, note_url(nid), author=r.get("author") or "", handle=um.group(1) if um else "", title=title, text=title,
-                   media_url=r.get("media_url") or "", has_media=bool(r.get("media_url")), extra=extra)
+                   media_url=r.get("media_url") or "", has_media=bool(r.get("media_url")), extra=extra,
+                   type="video" if r.get("video") else "note", avatar=r.get("avatar") or None)
 
     def json_raws(self, obj):
         out = []
@@ -106,8 +108,16 @@ class XiaohongshuCollector(FeedCollector):
                               dig(d, "cover", "info_list", 0, "url"))
             uid = user.get("user_id") or user.get("userId") or ""
             if uid: extra["author_user_id"] = uid
+            imgs = urls_of(d.get("image_list") or d.get("imageList") or [])
+            w, h = dig(d, "cover", "width", default=0), dig(d, "cover", "height", default=0)
+            vid = d.get("type") == "video"
             out.append(raw(nid, note_url(nid), author=user.get("nickname") or user.get("nick_name") or user.get("nickName") or "",
-                           handle=uid, title=title, text=d.get("desc") or title, media_url=cover, has_media=bool(cover), extra=extra))
+                           handle=uid, title=title, text=d.get("desc") or title, media_url=cover, has_media=bool(cover), extra=extra,
+                           type="video" if vid else "note", images=None if vid else (imgs or ([cover] if cover else None)),
+                           video_url=first_url(dig(d, "video", "media", "stream", "h264", 0, "master_url")) or None,
+                           duration=dig(d, "video", "capa", "duration", default=None) or None,
+                           aspect=round(w / h, 4) if isinstance(w, (int, float)) and isinstance(h, (int, float)) and w and h else None,
+                           avatar=first_url(user.get("avatar"), user.get("image")) or None))
         return out
 
     def resolve_user_id(self, page, cfg, session_file=""):

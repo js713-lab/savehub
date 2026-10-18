@@ -58,6 +58,14 @@ class CollectedItem:
     extra: dict = field(default_factory=dict)
     source_account: str = ""     # account key (handle w/o '@') of the session it was collected with; "" = default session
     title: str = ""              # explicit title (e.g. note/link title, contact name); default = first 120 chars of text
+    # media (one schema for every collector, see savehub/media.py): media_url stays the legacy "first image"
+    thumbnail_url: str = ""      # cover / poster; defaults to media_url
+    images: list = field(default_factory=list)   # every image of a photo / carousel / note post
+    video_url: str = ""          # direct video file URL when the app exposes one (never a page URL)
+    duration: Optional[float] = None             # video length in seconds
+    media_type: str = ""         # post | video | photo | note | file | contact ("" = inferred from extra flags)
+    author_avatar: str = ""      # author avatar image URL
+    aspect: Optional[float] = None               # cover width / height
 
     def to_savehub(self, account_id: Optional[int] = None, collected_at: str = "") -> dict:
         """Payload for POST /api/items (also accepted by db.add_item)."""
@@ -68,6 +76,10 @@ class CollectedItem:
              "source": f"collector:{self.platform}" + (f":{self.source_account}" if self.source_account else ""),
              "raw": {"posted_at": self.posted_at, "has_media": self.has_media, "collected_at": collected_at, **self.extra,
                      **({"source_account": "@" + self.source_account} if self.source_account else {})}}
+        from savehub import media
+        d.update(media.normalize({**d, "thumbnail_url": self.thumbnail_url or self.media_url, "images": self.images,
+                                  "video_url": self.video_url, "duration": self.duration, "type": self.media_type,
+                                  "author_avatar_url": self.author_avatar, "aspect": self.aspect}))
         if collected_at: d["saved_at"] = collected_at
         if account_id: d["account_id"] = int(account_id)
         return d

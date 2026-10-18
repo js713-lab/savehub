@@ -309,7 +309,8 @@ def file_item(rel: str, node, extra_text: dict) -> CollectedItem:
              **{k: v for k, v in extra_text.items() if k in ("content_type", "text_truncated", "text_note")},
              "text_chars": len(extra_text.get("text") or "")}
     return CollectedItem(platform=PLATFORM, url=url, external_id=f"{ref}:{file_version(node)}", author="iCloud Drive" + (f"/{folder}" if folder else ""),
-                         text=text, posted_at=_iso(mod), title=name, extra={k: v for k, v in extra.items() if v not in (None, "")})
+                         text=text, posted_at=_iso(mod), title=name, extra={k: v for k, v in extra.items() if v not in (None, "")},
+                         media_type="file")
 
 
 def contact_item(c: dict) -> Optional[CollectedItem]:
@@ -328,7 +329,8 @@ def contact_item(c: dict) -> Optional[CollectedItem]:
     extra = {"kind": "contact", "service": "contacts", "contact_id": cid, "version": version, "org": org, "job_title": job,
              "phone": phones[0] if phones else "", "phones": phones, "emails": emails}
     return CollectedItem(platform=PLATFORM, url=CONTACTS_WEB + "#" + quote(cid, safe=""), external_id=f"contact:{cid}:{version}",
-                         author=org, text="\n".join(lines), title=name, extra={k: v for k, v in extra.items() if v not in (None, "", [])})
+                         author=org, text="\n".join(lines), title=name, extra={k: v for k, v in extra.items() if v not in (None, "", [])},
+                         media_type="contact")
 
 
 # ------------------------------------------------------------------ the collector

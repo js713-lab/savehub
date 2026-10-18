@@ -1,4 +1,5 @@
 """Sample data (all rows flagged is_sample=1; fictional people/handles; example URLs)."""
+import json
 from datetime import datetime, timedelta, timezone
 from . import db
 
@@ -44,6 +45,50 @@ ITEMS = [
     ("x", 0, "Concert announcement: KL Arena tour dates", "Music: concert tour dates at Bukit Jalil, tickets on sale Friday.", "Music Sample", "music_s", "https://x.com/music_s/status/1000000000000000005", 13),
     ("web", None, "Reading list: 10 books on habits & focus", "Book list: Atomic Habits, Deep Work, and more on productivity and learning.", "Books Sample", None, "https://example.com/sample/reading-list", 20),
 ]
+# Sample media (index into ITEMS -> media fields). Images are royalty-free placeholders from picsum.photos (Unsplash
+# licence), stored in static/sample-media/ so they render offline; see static/sample-media/CREDITS.md.
+M = "/static/sample-media/"
+MEDIA = {
+    0:  {"type": "photo", "images": [M + "x-python-laptop.jpg"], "aspect": 16 / 9, "author_avatar_url": M + "avatar-coffee.jpg"},
+    4:  {"type": "photo", "images": [M + "threads-desk.jpg"], "aspect": 4 / 3},
+    6:  {"type": "photo", "images": [M + f"ig-nasilemak-{i}.jpg" for i in range(1, 5)], "aspect": 0.8, "author_avatar_url": M + "avatar-lion.jpg",
+         "raw": {"collections": ["KL food", "Weekend plans"]}},
+    7:  {"type": "photo", "images": [M + f"ig-penang-{i}.jpg" for i in range(1, 4)], "aspect": 1.0, "raw": {"collections": ["Travel"]}},
+    8:  {"type": "video", "thumbnail_url": M + "ig-workout.jpg", "duration": 912, "aspect": 0.5625},
+    9:  {"type": "photo", "images": [M + "fb-ikea.jpg"], "aspect": 1.6},
+    10: {"type": "photo", "images": [M + "fb-deals.jpg"], "aspect": 1.6},
+    16: {"type": "video", "thumbnail_url": M + "tt-skincare.jpg", "duration": 47, "aspect": 0.5625},
+    17: {"type": "video", "thumbnail_url": M + "tt-cat.jpg", "video_url": M + "tt-cat.mp4", "duration": 10, "aspect": 0.5625, "author_avatar_url": M + "avatar-cat.jpg"},
+    18: {"type": "video", "thumbnail_url": M + "tt-budget.jpg", "duration": 74, "aspect": 0.5625},
+    19: {"type": "video", "thumbnail_url": M + "dy-dinner.jpg", "duration": 38, "aspect": 0.5625},
+    20: {"type": "video", "thumbnail_url": M + "dy-running.jpg", "duration": 125, "aspect": 0.5625},
+    21: {"type": "note", "images": [M + f"xhs-coffee-{i}.jpg" for i in range(1, 5)], "aspect": 0.75, "author_avatar_url": M + "avatar-pug.jpg"},
+    22: {"type": "note", "images": [M + "xhs-outfit-1.jpg", M + "xhs-outfit-2.jpg"], "aspect": 0.75},
+    23: {"type": "note", "images": [M + f"xhs-penang-{i}.jpg" for i in range(1, 4)], "aspect": 0.75, "author_avatar_url": M + "avatar-husky.jpg"},
+    24: {"type": "note", "images": [M + "xhs-notion.jpg"], "aspect": 0.75},
+    27: {"type": "post", "thumbnail_url": M + "web-figma.jpg", "aspect": 16 / 9},
+    28: {"type": "video", "thumbnail_url": M + "x-concert.jpg", "video_url": M + "x-concert.mp4", "duration": 7, "aspect": 16 / 9, "author_avatar_url": M + "avatar-dog.jpg"},
+    29: {"type": "post", "thumbnail_url": M + "web-reading.jpg", "aspect": 1.6},
+}
+SAMPLE_MEDIA_VERSION = 1
+
+
+def apply_sample_media():
+    """Give existing SAMPLE rows (seeded before media existed) their sample media. Only rows flagged is_sample."""
+    c = db.conn(); n = 0
+    for i, m in MEDIA.items():
+        p, url = ITEMS[i][0], ITEMS[i][6]
+        r = c.execute("SELECT id, raw FROM items WHERE platform=? AND url=? AND is_sample=1", (p, url)).fetchone()
+        if not r: continue
+        upd = dict(m)
+        if isinstance(upd.get("raw"), dict):   # merge into the row's raw instead of replacing it
+            try: old = json.loads(r["raw"] or "{}")
+            except ValueError: old = {}
+            upd["raw"] = {**(old if isinstance(old, dict) else {}), **upd["raw"]}
+        db.update_item(r["id"], upd); n += 1
+    db.set_setting("sample_media", SAMPLE_MEDIA_VERSION)
+    return n
+
 CONTACTS = [
     ("Aisyah Rahman (sample)", ["+60 12-111 1111"], ["aisyah@example.com"], "Sample Sdn Bhd", "whatsapp", 5),
     ("陈小明 Chen Xiaoming (sample)", ["+60 16-222 2222"], [], "", "wechat", 6),
@@ -56,6 +101,7 @@ CONTACTS = [
 def seed(force=False):
     c = db.conn()
     if not force and (c.execute("SELECT count(*) FROM settings WHERE key='seeded'").fetchone()[0]):
+        if db.get_settings().get("sample_media") != SAMPLE_MEDIA_VERSION: return {"skipped": True, "sample_media": apply_sample_media()}
         return {"skipped": True}
     now = datetime.now(timezone.utc).replace(microsecond=0)
     acc_ids = []
@@ -64,9 +110,10 @@ def seed(force=False):
                                  "tags": tags, "status": st, "connected_via": via, "is_sample": 1, "created_at": (now - timedelta(days=200)).isoformat()})
         acc_ids.append(aid)
     n = 0
-    for p, ai, title, content, author, handle, url, days in ITEMS:
+    for idx, (p, ai, title, content, author, handle, url, days) in enumerate(ITEMS):
         _, cr = db.add_item({"platform": p, "account_id": acc_ids[ai] if ai is not None else None, "title": title, "content": content, "author": author,
-                             "author_handle": handle, "url": url, "saved_at": (now - timedelta(days=days, hours=n % 9)).isoformat(), "source": "sample", "is_sample": 1})
+                             "author_handle": handle, "url": url, "saved_at": (now - timedelta(days=days, hours=n % 9)).isoformat(), "source": "sample", "is_sample": 1,
+                             **MEDIA.get(idx, {})})
         n += cr
     for name, ph, em, org, p, ai in CONTACTS:
         db.add_contact({"name": name, "phones": ph, "emails": em, "org": org, "platform": p, "account_id": acc_ids[ai], "is_sample": 1, "source": "sample"})
@@ -75,5 +122,6 @@ def seed(force=False):
     if not tagger.llm_config():
         ids = [r[0] for r in c.execute("SELECT id FROM items WHERE is_sample=1")]
         tagger.retag(ids)
+    apply_sample_media()          # also refreshes sample rows that already existed (force re-seed)
     db.set_setting("seeded", True)
     return {"items": n, "accounts": len(acc_ids), "contacts": len(CONTACTS)}

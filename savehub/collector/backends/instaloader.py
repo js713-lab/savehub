@@ -37,10 +37,17 @@ def map_node(n: dict) -> CollectedItem | None:
     if reel: extra["product_type"] = "clips"
     if n.get("accessibility_caption"): extra["alt"] = str(n["accessibility_caption"])[:500]
     media = n.get("display_url") or n.get("thumbnail_src") or ""
+    imgs = [u for u in (dig(e, "node", "display_url") for e in side) if isinstance(u, str) and u.startswith("http")] or ([media] if media and not extra.get("video") else [])
+    dims = n.get("dimensions") or {}
+    try: aspect = round(float(dims["width"]) / float(dims["height"]), 4)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError): aspect = None
     return CollectedItem(platform="instagram", url=url, external_id=str(code), author=owner.get("full_name") or "",
                          author_handle=owner.get("username") or "", text=cap,
                          posted_at=iso_from_epoch(n.get("taken_at_timestamp") or n.get("taken_at")),
-                         has_media=bool(media), media_url=media, extra=extra)
+                         has_media=bool(media), media_url=media, extra=extra,
+                         images=imgs[:20], video_url=n.get("video_url") or "", duration=n.get("video_duration"),
+                         media_type="video" if extra.get("video") else "photo", author_avatar=owner.get("profile_pic_url") or "",
+                         aspect=aspect)
 
 
 def _loader():

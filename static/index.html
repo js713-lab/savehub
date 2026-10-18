@@ -4,7 +4,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SaveHub — all your saves in one place</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%94%96%3C/text%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/style.css?v=7">
+<link rel="stylesheet" href="/static/style.css?v=8">
 </head>
 <body>
 <header class="top">
@@ -13,15 +13,16 @@
     <a href="#/library">Library</a><a href="#/summary">Summary</a><a href="#/accounts">Accounts</a>
     <a href="#/contacts">Contacts</a><a href="#/connect">Connect apps</a><a href="#/settings">Settings</a>
   </nav>
-  <button class="btn ghost" id="theme" title="Toggle dark/light">◐</button>
+  <button class="btn ghost" id="theme" title="Toggle dark/light" aria-label="Toggle dark or light theme">◐</button>
 </header>
 <div id="samplebar" class="samplebar hidden">
   <span>⚠️ Showing <b id="samplecount"></b> <b>SAMPLE</b> rows (fictional demo data, marked “SAMPLE”).</span>
   <button class="btn small" onclick="clearSamples()">Clear sample data</button>
 </div>
 <main id="view"></main>
+<div id="drawer" class="drawer hidden"><div class="drawer-scrim" id="drawerScrim"></div><div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="dTitle"><div id="drawerBody"></div></div></div>
 <div id="modal" class="modal hidden"><div class="modal-card" id="modalcard" role="dialog" aria-modal="true"></div></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script src="/static/app.js?v=7"></script>
+<script src="/static/app.js?v=9"></script>
 </body>
 </html>

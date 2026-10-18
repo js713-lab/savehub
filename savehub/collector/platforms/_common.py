@@ -10,7 +10,8 @@ A platform module subclasses FeedCollector and provides:
                  JSON is usually richer and more stable than the obfuscated DOM; DOM is the fallback.
   targets()      list of (url, label) pages to scroll (label = collection name for Instagram collections)
 
-Normalized raw dict: {id, url, author, handle, text, title, posted_at, media_url, has_media, extra}.
+Normalized raw dict: {id, url, author, handle, text, title, posted_at, media_url, has_media, extra}
+  + optional media keys (savehub/media.py schema): images [urls], video_url, duration (s), type, avatar, aspect.
 DOM and JSON results are merged by id: the first sighting creates the item, later sightings only fill empty fields.
 """
 from __future__ import annotations
@@ -75,6 +76,24 @@ def first_url(*cands) -> str:
         if isinstance(c, str) and c.startswith("http"): return c
         if isinstance(c, list) and c and isinstance(c[0], str) and c[0].startswith("http"): return c[0]
     return ""
+
+
+MEDIA_KEYS = (("images", "images"), ("video_url", "video_url"), ("duration", "duration"), ("media_type", "type"),
+              ("author_avatar", "avatar"), ("aspect", "aspect"))
+
+
+def urls_of(*lists) -> list:
+    """Flatten image URL candidates (str, [str], {url}, {url_list:[..]}, {urlList:[..]}, {imageURL:{urlList}}) -> unique list."""
+    out = []
+    def add(u):
+        if isinstance(u, str) and u.startswith("http") and u not in out: out.append(u)
+    for v in lists:
+        for x in (v if isinstance(v, list) else [v]):
+            if isinstance(x, dict):
+                x = x.get("url") or x.get("url_default") or x.get("urlDefault") or first_url(x.get("url_list"), x.get("urlList"),
+                    dig(x, "imageURL", "urlList"), dig(x, "image_versions2", "candidates", 0, "url"), dig(x, "display_url"))
+            add(x)
+    return out[:20]
 
 
 def raw(id, url, **kw) -> dict:
@@ -147,16 +166,20 @@ class FeedCollector(Collector):
         return out
 
     def to_item(self, r: dict) -> CollectedItem:
-        return CollectedItem(platform=self.platform, url=r["url"], external_id=r["id"], author=r.get("author") or "",
-                             author_handle=r.get("handle") or "", text=r.get("text") or "", title=r.get("title") or "",
-                             posted_at=r.get("posted_at") or "", has_media=bool(r.get("has_media") or r.get("media_url")),
-                             media_url=r.get("media_url") or "", extra=dict(r.get("extra") or {}))
+        it = CollectedItem(platform=self.platform, url=r["url"], external_id=r["id"], author=r.get("author") or "",
+                           author_handle=r.get("handle") or "", text=r.get("text") or "", title=r.get("title") or "",
+                           posted_at=r.get("posted_at") or "", has_media=bool(r.get("has_media") or r.get("media_url")),
+                           media_url=r.get("media_url") or "", extra=dict(r.get("extra") or {}))
+        for f, k in MEDIA_KEYS:
+            if r.get(k): setattr(it, f, list(r[k]) if f == "images" else r[k])
+        return it
 
     @staticmethod
     def _fill(it: CollectedItem, r: dict):
         for f, k in (("author", "author"), ("author_handle", "handle"), ("text", "text"), ("title", "title"),
-                     ("posted_at", "posted_at"), ("media_url", "media_url")):
-            if not getattr(it, f) and r.get(k): setattr(it, f, r[k])
+                     ("posted_at", "posted_at"), ("media_url", "media_url"), *MEDIA_KEYS):
+            if not getattr(it, f) and r.get(k): setattr(it, f, list(r[k]) if f == "images" else r[k])
+        if len(r.get("images") or []) > len(it.images): it.images = list(r["images"])   # JSON beats the DOM's first image
         if r.get("has_media") or r.get("media_url"): it.has_media = True
         for k, v in (r.get("extra") or {}).items(): it.extra.setdefault(k, v)
 

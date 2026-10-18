@@ -9,17 +9,18 @@ import ipaddress, os, re, time
 from typing import Optional
 from urllib.parse import urlsplit
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from . import auth, db, importers, summary, sync, tagger, vault, xoauth
+from . import auth, db, importers, mediaproxy, summary, sync, tagger, vault, xoauth
 
 app = FastAPI(title="SaveHub", version="1.0")
 STATIC = db.ROOT / "static"
 
 # ---- security headers + same-origin (CSRF) guard ----
 # 'unsafe-inline' for scripts is still needed by the dashboard's inline on* handlers; everything else is locked to
-# 'self' (no third-party scripts, no framing, no plugins, fetch/XHR only to this origin).
-CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; "
+# 'self' (no third-party scripts, no framing, no plugins, fetch/XHR only to this origin). Images are same-origin only:
+# remote thumbnails go through the authenticated /api/media proxy; media-src keeps https: for direct video files.
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
        "media-src 'self' https:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; "
        "frame-ancestors 'none'; form-action 'self'")
 SEC_HEADERS = {"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
@@ -70,9 +71,28 @@ def platforms():
 # ---- items ----
 @app.get("/api/items")
 def items(q: str = "", platform: str = "", tag: str = "", account_id: str = "", sort: str = "saved_at", order: str = "desc",
-          limit: int = 50, offset: int = 0, enabled_only: bool = False):
+          limit: int = 50, offset: int = 0, enabled_only: bool = False, type: str = ""):
     en = db.get_settings()["enabled_platforms"] if enabled_only else None
-    return db.list_items(q, _csv(platform), _csv(tag), account_id or None, sort, order, limit, offset, en)
+    return db.list_items(q, _csv(platform), _csv(tag), account_id or None, sort, order, limit, offset, en, types=_csv(type))
+
+# ---- remote thumbnails: authenticated, allow-listed, SSRF-safe image proxy + cache (see savehub/mediaproxy.py) ----
+def _media_guard(req: Request):
+    """Dashboard login when configured (checked here too, not only by the dispatcher); without one, this machine only
+    (so a password-less public deploy is not an open image proxy). Cross-site embedding is refused."""
+    if auth.login_configured():
+        if not auth.basic_ok(req.headers.get("authorization", "")): raise HTTPException(401, "login required", headers={"WWW-Authenticate": 'Basic realm="SaveHub"'})
+    elif not (_is_loopback(req.client.host if req.client else "") and _host_only(req.headers.get("host") or "") in _LOOPBACK_HOSTS):
+        raise HTTPException(403, "the media proxy only answers this machine unless a dashboard login is configured")
+    sfs = (req.headers.get("sec-fetch-site") or "").lower()
+    if sfs and sfs not in ("same-origin", "none"): raise HTTPException(403, "cross-site request refused")
+
+@app.get("/api/media")
+def media_proxy(req: Request, u: str = ""):
+    _media_guard(req)
+    try: data, ctype = mediaproxy.fetch(u)
+    except mediaproxy.MediaError as e: raise HTTPException(e.status, str(e))
+    return Response(data, media_type=ctype, headers={"Cache-Control": "private, max-age=86400", "Content-Disposition": "inline",
+                                                     "Content-Security-Policy": "default-src 'none'; sandbox"})
 
 @app.get("/api/items/{item_id}")
 def item(item_id: int):

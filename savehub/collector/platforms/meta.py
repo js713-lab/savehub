@@ -15,7 +15,7 @@ import logging, re
 from urllib.parse import urlparse
 from ..base import CollectorError, RunConfig, register
 from ..logutil import ev
-from ._common import FeedCollector, dig, iso_from_epoch, mark_target, raw, walk
+from ._common import FeedCollector, dig, first_url, iso_from_epoch, mark_target, raw, urls_of, walk
 
 
 def is_meta_post(d: dict) -> bool:
@@ -39,6 +39,30 @@ def meta_media(d: dict) -> tuple[str, dict]:
     return url, extra
 
 
+def _cand(m: dict) -> str:
+    for c in dig(m, "image_versions2", "candidates", default=[]) or []:
+        if isinstance(c, dict) and str(c.get("url", "")).startswith("http"): return c["url"]
+    return first_url(m.get("display_uri"), m.get("display_url"))
+
+
+def meta_media_fields(d: dict) -> dict:
+    """Media schema fields (savehub/media.py) for an Instagram/Threads media object: every carousel image, the direct
+    video file (video_versions), duration, cover aspect ratio and the author's avatar."""
+    car = [m for m in (d.get("carousel_media") or []) if isinstance(m, dict)]
+    images = urls_of([_cand(m) for m in car] if car else [_cand(d)])
+    vids = d.get("video_versions") or next((m.get("video_versions") for m in car if m.get("video_versions")), None) or []
+    video = next((v["url"] for v in vids if isinstance(v, dict) and str(v.get("url", "")).startswith("http")), "")
+    w, h = d.get("original_width") or dig(d, "image_versions2", "candidates", 0, "width"), d.get("original_height") or dig(d, "image_versions2", "candidates", 0, "height")
+    out = {"images": images if not video else [], "video_url": video, "duration": d.get("video_duration"),
+           "avatar": first_url(dig(d, "user", "profile_pic_url"))}
+    try: out["aspect"] = round(float(w) / float(h), 4) if w and h else None
+    except (TypeError, ValueError, ZeroDivisionError): pass
+    if video or d.get("media_type") == 2: out["type"] = "video"
+    elif car or d.get("media_type") in (1, 8): out["type"] = "photo"
+    elif not images: out["type"] = "post"         # Threads text post
+    return {k: v for k, v in out.items() if v}
+
+
 def meta_raw(d: dict, url: str) -> dict:
     media, extra = meta_media(d)
     if d.get("media_type") is not None: extra["media_type"] = d.get("media_type")
@@ -47,7 +71,7 @@ def meta_raw(d: dict, url: str) -> dict:
     return raw(d["code"], url, author=dig(d, "user", "full_name") or "", handle=d["user"]["username"],
                text=dig(d, "caption", "text") or "", posted_at=iso_from_epoch(d.get("taken_at")),
                media_url=media, has_media=bool(media and (extra.get("video") or extra.get("carousel") or d.get("media_type") in (1, 2, 8))),
-               extra=extra)
+               extra=extra, **meta_media_fields(d))
 
 
 # ====================================================================== Threads

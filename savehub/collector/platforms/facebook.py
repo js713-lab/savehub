@@ -104,7 +104,8 @@ class FacebookCollector(FeedCollector):
         if r.get("video"): extra["video"] = True
         author = re.sub(r"(?:'s|’s) (?:post|video|reel|photo)$", "", r.get("source") or "").strip()
         return raw(short_hash(url), url, author=author, title=r.get("title") or "", text=r.get("title") or "",
-                   media_url=r.get("media_url") or "", has_media=bool(r.get("media_url") or r.get("video")), extra=extra)
+                   media_url=r.get("media_url") or "", has_media=bool(r.get("media_url") or r.get("video")), extra=extra,
+                   type="video" if r.get("video") or re.search(r"/(?:videos|reel|watch)/", url) else ("photo" if r.get("media_url") else "post"))
 
     def json_raws(self, obj):
         out = []
@@ -113,8 +114,9 @@ class FacebookCollector(FeedCollector):
             url = clean_url(s.get("url") or dig(s, "savable_permalink") or d.get("url") or "")
             if not url: continue
             title = dig(s, "savable_title", "text") or ""
-            out.append(raw(short_hash(url), url, title=title, text=title,
-                           media_url=first_url(dig(s, "savable_image", "uri"), dig(d, "image", "uri")), extra={}))
+            img = first_url(dig(s, "savable_image", "uri"), dig(d, "image", "uri"))
+            out.append(raw(short_hash(url), url, title=title, text=title, media_url=img, extra={},
+                           type="video" if re.search(r"/(?:videos|reel|watch)/", url) else ("photo" if img else "post")))
         return out
 
     def dom_raws(self, page):

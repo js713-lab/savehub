@@ -100,7 +100,8 @@ class MessengerCollector(ContactsCollector):
         if e2ee: extra["e2ee"] = True
         if r.get("preview"): extra["last_message"] = r["preview"][:300]
         if r.get("unread"): extra["unread"] = True
-        return raw(tid, url, author=name, title=name, text="", media_url=r.get("media_url") or "", has_media=False, extra=extra)
+        return raw(tid, url, author=name, title=name, text="", media_url=r.get("media_url") or "", has_media=False, extra=extra,
+                   type="contact", avatar=r.get("media_url") or None)
 
 
 # ====================================================================== WhatsApp
@@ -176,7 +177,7 @@ def wa_item(id_: str, name: str, **extra) -> dict | None:
     else:
         return None          # status@broadcast, newsletters, ...
     name = name or extra.get("phone") or id_
-    return raw(id_, url, author=name, title=name, extra={"kind": kind, "wa_id": id_, **{k: v for k, v in extra.items() if v not in ("", None, False, 0)}})
+    return raw(id_, url, author=name, title=name, type="contact", extra={"kind": kind, "wa_id": id_, **{k: v for k, v in extra.items() if v not in ("", None, False, 0)}})
 
 
 @register
@@ -230,7 +231,8 @@ class WhatsAppCollector(ContactsCollector):
             return wa_item(f"{digits}@c.us", name, last_message=(r.get("preview") or "")[:300])
         kind = "group" if r.get("group") else "chat"
         return raw("chat:" + short_hash(name), f"https://web.whatsapp.com/#chat/{quote(name)}", author=name, title=name,
-                   media_url=r.get("media_url") or "", extra={"kind": kind, **({"last_message": r["preview"][:300]} if r.get("preview") else {})})
+                   media_url=r.get("media_url") or "", extra={"kind": kind, **({"last_message": r["preview"][:300]} if r.get("preview") else {})},
+                   type="contact", avatar=r.get("media_url") or None)
 
     def collect(self, page, cfg: RunConfig, session_file=""):
         items = {it.external_id: it for it in super().collect(page, cfg, session_file)}

@@ -60,6 +60,10 @@ EXTRACT_JS = r"""
     const photos = pick('[data-testid="tweetPhoto"]');
     const video = pick('[data-testid="videoPlayer"], [data-testid="videoComponent"]');
     const img = photos.map(p => p.querySelector("img")).find(Boolean);
+    const imgs = photos.map(p => p.querySelector("img")).filter(Boolean).map(i => i.getAttribute("src") || "").filter(Boolean);
+    const vEl = video.map(v => v.querySelector("video")).find(Boolean);
+    const av = pick('[data-testid="Tweet-User-Avatar"] img')[0];
+    const dur = video.map(v => [...v.querySelectorAll("span, div")].map(x => (x.textContent || "").trim()).find(t => /^\d{1,2}:\d{2}$/.test(t))).find(Boolean) || "";
     const sc = pick('[data-testid="socialContext"]')[0];
     let quoted = null;
     if (quotes.length) { const q = quotes[0];
@@ -67,7 +71,9 @@ EXTRACT_JS = r"""
       quoted = { text: txt(qt).trim(), user: qu ? (qu.textContent || "").trim() : "" }; }
     out.push({ href: link.getAttribute("href"), datetime: t.getAttribute("datetime"), name, handle,
                text: txt(textEl).trim(), photos: photos.length, video: video.length > 0,
-               media_url: img ? img.getAttribute("src") : "", social_context: sc ? (sc.textContent || "").trim() : "",
+               media_url: img ? img.getAttribute("src") : "", images: imgs, poster: vEl ? (vEl.getAttribute("poster") || "") : "",
+               video_src: vEl && /^https?:/.test(vEl.getAttribute("src") || "") ? vEl.getAttribute("src") : "",
+               avatar: av ? (av.getAttribute("src") || "") : "", duration: dur, social_context: sc ? (sc.textContent || "").trim() : "",
                card: pick('[data-testid="card.wrapper"]').length > 0, quoted });
   }
   return out;
@@ -107,7 +113,12 @@ def parse_raw(raws: list[dict]) -> list[CollectedItem]:
         out.append(CollectedItem(platform="x", url=url, external_id=tid, author=r.get("name") or "",
                                  author_handle=r.get("handle") or url_handle, text=r.get("text") or "",
                                  posted_at=r.get("datetime") or "", has_media=bool(r.get("photos") or r.get("video")),
-                                 media_url=r.get("media_url") or "", extra=extra))
+                                 media_url=r.get("media_url") or r.get("poster") or "", extra=extra,
+                                 images=[u for u in (r.get("images") or []) if isinstance(u, str)][:20],
+                                 thumbnail_url=r.get("media_url") or r.get("poster") or "",
+                                 video_url=r.get("video_src") or "", duration=r.get("duration") or None,
+                                 media_type="video" if r.get("video") else ("photo" if r.get("photos") else "post"),
+                                 author_avatar=r.get("avatar") or ""))
     return out
 
 

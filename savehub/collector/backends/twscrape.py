@@ -54,9 +54,18 @@ def map_tweet(t) -> CollectedItem | None:
         if _g(t, k) is not None: extra[ek] = _g(t, k)
     d = _g(t, "date")
     posted = d.isoformat() if hasattr(d, "isoformat") else str(d or "")
+    vid = (videos or animated or [None])[0]
+    variants = sorted((v for v in (_g(vid, "variants") or []) if "mp4" in str(_g(v, "contentType") or "")),
+                      key=lambda v: _g(v, "bitrate") or 0, reverse=True) if vid is not None else []
+    dur = _g(vid, "duration") if vid is not None else None
     return CollectedItem(platform="x", url=f"https://x.com/{handle}/status/{tid}", external_id=tid,
                          author=_g(user, "displayname") or "", author_handle=handle, text=_g(t, "rawContent") or "",
-                         posted_at=posted, has_media=bool(photos or videos or animated), media_url=first, extra=extra)
+                         posted_at=posted, has_media=bool(photos or videos or animated), media_url=first, extra=extra,
+                         images=[u for u in (_g(p, "url") for p in photos) if u][:20],
+                         video_url=(_g(variants[0], "url") or "") if variants else "",
+                         duration=(dur / 1000 if isinstance(dur, (int, float)) and dur > 0 else None),
+                         media_type="video" if vid is not None else ("photo" if photos else "post"),
+                         author_avatar=_g(user, "profileImageUrl") or "")
 
 
 async def _collect(cookies: dict, cfg: RunConfig, account: str, pool_file: str) -> list:

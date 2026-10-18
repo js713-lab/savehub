@@ -35,7 +35,8 @@ def versioned(item: CollectedItem) -> bool:
 
 def update_fields(item: CollectedItem, account_id=None, collected_at="") -> dict:
     d = item.to_savehub(account_id, collected_at)
-    out = {k: d[k] for k in ("title", "content", "author", "external_id", "media_url") if k in d}
+    from savehub import media
+    out = {k: d[k] for k in ("title", "content", "author", "external_id", "media_url", *media.FIELDS) if k in d}
     out["raw"] = json.dumps(d.get("raw") or {}, ensure_ascii=False)[:20000]
     return out
 

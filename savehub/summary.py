@@ -10,6 +10,7 @@ def get_summary(days=7, use_ai=True, enabled_only=None):
     tags = Counter(t for i in items for t in (i["tags"] or []))
     authors = Counter(i["author"] for i in items if i.get("author"))
     by_day = Counter((i["saved_at"] or "")[:10] for i in items)
+    by_type = Counter(i.get("type") or "post" for i in items)
     digest, by = None, "local"
     if items and use_ai and tagger.llm_config():
         try:
@@ -30,4 +31,5 @@ def get_summary(days=7, use_ai=True, enabled_only=None):
                       f"(Template digest — set OPENAI_API_KEY or XAI_API_KEY for an AI-written summary.)")
     return {"days": days, "since": since, "total": len(items), "by_platform": dict(by_p.most_common()),
             "top_tags": tags.most_common(15), "top_authors": authors.most_common(8), "by_day": dict(sorted(by_day.items())),
+            "by_type": dict(by_type.most_common()),
             "digest": digest, "digest_by": by, "recent": items[:12]}

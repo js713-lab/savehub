@@ -1,5 +1,6 @@
 """SQLite storage with FTS5 (trigram tokenizer => works for English and Chinese substrings)."""
 import json, os, sqlite3, threading, time
+from . import media
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,6 +65,8 @@ CREATE TABLE IF NOT EXISTS items(
   url TEXT, title TEXT, content TEXT, author TEXT, author_handle TEXT, media_url TEXT,
   saved_at TEXT, created_at TEXT, tags TEXT DEFAULT '[]', summary TEXT, tagger TEXT,
   source TEXT, external_id TEXT, notion_page_id TEXT, is_sample INTEGER DEFAULT 0, raw TEXT,
+  type TEXT, thumbnail_url TEXT, images TEXT DEFAULT '[]', video_url TEXT, embed_url TEXT, duration INTEGER, aspect REAL,
+  author_avatar_url TEXT,
   UNIQUE(platform, url));
 CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(title, content, author, tags, summary, content='items', content_rowid='id', tokenize='trigram');
 CREATE TRIGGER IF NOT EXISTS items_ai AFTER INSERT ON items BEGIN
@@ -99,19 +102,50 @@ def harden_files():
         except OSError: pass
     return fixed
 
+# media columns added in schema v2 (see savehub/media.py); older DBs get them via ALTER TABLE + a one-time backfill
+MEDIA_COLUMNS = [("type", "TEXT"), ("thumbnail_url", "TEXT"), ("images", "TEXT DEFAULT '[]'"), ("video_url", "TEXT"),
+                 ("embed_url", "TEXT"), ("duration", "INTEGER"), ("aspect", "REAL"), ("author_avatar_url", "TEXT")]
+SCHEMA_VERSION = 2
+
 def init(c):
     c.executescript(SCHEMA)
+    migrate(c)
     c.commit()
+
+def migrate(c):
+    """Idempotent: add missing media columns, then (once per DB, tracked in PRAGMA user_version) derive the media
+    fields of existing rows from their legacy media_url + raw flags."""
+    cols = {r[1] for r in c.execute("PRAGMA table_info(items)")}
+    for col, typ in MEDIA_COLUMNS:
+        if col not in cols:
+            c.execute(f"ALTER TABLE items ADD COLUMN {col} {typ}")  # nosec B608 - fixed column list above
+    c.execute("CREATE INDEX IF NOT EXISTS idx_items_type ON items(type)")
+    if c.execute("PRAGMA user_version").fetchone()[0] >= SCHEMA_VERSION: return 0
+    n = 0
+    for r in c.execute("SELECT id, platform, url, media_url, raw, type, thumbnail_url, images, video_url, duration, aspect, author_avatar_url FROM items WHERE type IS NULL").fetchall():
+        m = media.for_db(dict(r))
+        c.execute(f"UPDATE items SET {','.join(k + '=?' for k in m)} WHERE id=?", list(m.values()) + [r["id"]])  # nosec B608 - keys are media.FIELDS
+        n += 1
+    c.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+    return n
 
 def rows(cur):
     out = []
     for r in cur.fetchall():
         d = dict(r)
-        for k in ("tags", "phones", "emails"):
+        for k in ("tags", "phones", "emails", "images"):
             if k in d and isinstance(d[k], str):
                 try: d[k] = json.loads(d[k])
                 except Exception: d[k] = []
-        d.pop("raw", None)
+            elif k == "images" and k in d and d[k] is None: d[k] = []
+        raw = d.pop("raw", None)
+        if "platform" in d and "url" in d and "title" in d and "saved_at" in d:   # an item row: expose a few safe raw fields
+            try: rj = json.loads(raw) if isinstance(raw, str) else {}
+            except ValueError: rj = {}
+            rj = rj if isinstance(rj, dict) else {}
+            cols = rj.get("collections")
+            d["collections"] = [str(x) for x in cols if isinstance(x, (str, int))][:20] if isinstance(cols, list) else []
+            d["posted_at"] = rj.get("posted_at") if isinstance(rj.get("posted_at"), str) else None
         out.append(d)
     return out
 
@@ -134,7 +168,8 @@ def set_setting(key, value):
     c = conn(); c.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, json.dumps(value))); c.commit()
 
 # ---------------- items ----------------
-ITEM_FIELDS = ["platform","account_id","url","title","content","author","author_handle","media_url","saved_at","tags","summary","tagger","source","external_id","is_sample","raw"]
+ITEM_FIELDS = ["platform","account_id","url","title","content","author","author_handle","media_url","saved_at","tags","summary","tagger","source","external_id","is_sample","raw",
+               *media.FIELDS]
 SORTS = {"saved_at":"i.saved_at","platform":"i.platform","author":"lower(i.author)","title":"lower(i.title)","created_at":"i.created_at"}
 
 def add_item(d, tag=True):
@@ -145,6 +180,7 @@ def add_item(d, tag=True):
     if tag and not d.get("tags"):
         t = tagger.tag_item(d); d["tags"], d["summary"], d["tagger"] = t["tags"], t["summary"], t["tagger"]
     d["tags"] = json.dumps(d.get("tags") or [], ensure_ascii=False)
+    d.update(media.for_db(d))                    # one media schema for every source (collector, importer, REST, MCP)
     if isinstance(d.get("raw"), (dict, list)): d["raw"] = json.dumps(d["raw"], ensure_ascii=False)[:20000]
     c = conn()
     if d.get("url"):
@@ -188,10 +224,17 @@ def update_item(item_id, d):
     d = {k: v for k, v in d.items() if k in ITEM_FIELDS}
     if "tags" in d: d["tags"] = json.dumps(d["tags"], ensure_ascii=False)
     if not d: return
+    if any(k in d for k in (*media.FIELDS, "media_url", "raw")):   # re-derive the media fields from the merged row
+        cur = conn().execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
+        if cur:
+            merged = {**dict(cur), "images": json.loads(cur["images"] or "[]") if isinstance(cur["images"], str) else [], **d}
+            if "media_url" in d and "thumbnail_url" not in d: merged["thumbnail_url"] = None
+            d.update(media.for_db(merged))
+    if isinstance(d.get("raw"), (dict, list)): d["raw"] = json.dumps(d["raw"], ensure_ascii=False)[:20000]
     c = conn(); c.execute(f"UPDATE items SET {','.join(k+'=?' for k in d)} WHERE id=?", list(d.values()) + [item_id]); c.commit()  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
 
 def get_item(item_id):
-    r = rows(conn().execute("SELECT i.*, a.display_name AS account_name, a.handle AS account_handle FROM items i LEFT JOIN accounts a ON a.id=i.account_id WHERE i.id=?", (item_id,)))
+    r = rows(conn().execute("SELECT i.*, a.display_name AS account_name, a.handle AS account_handle, a.platform AS account_platform FROM items i LEFT JOIN accounts a ON a.id=i.account_id WHERE i.id=?", (item_id,)))
     return r[0] if r else None
 
 def delete_item(item_id):
@@ -205,8 +248,10 @@ def _fts_query(q):
     return " AND ".join(f'"{t}"' for t in long_t), short_t
 
 def list_items(q="", platforms=None, tags=None, account_id=None, sort="saved_at", order="desc",
-               limit=50, offset=0, enabled_only=None, since=None, include_samples=True):
+               limit=50, offset=0, enabled_only=None, since=None, include_samples=True, types=None):
     where, args = [], []
+    types = [t for t in (types or []) if t in media.TYPES]
+    if types: where.append(f"coalesce(i.type,'post') IN ({','.join('?'*len(types))})"); args += types
     join = ""
     if q:
         fq, short = _fts_query(q)
@@ -225,7 +270,7 @@ def list_items(q="", platforms=None, tags=None, account_id=None, sort="saved_at"
     else: ob = SORTS.get(sort, "i.saved_at") + (" ASC" if str(order).lower() == "asc" else " DESC")
     c = conn()
     total = c.execute(f"SELECT count(*) FROM items i {join} {w}", args).fetchone()[0]  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
-    res = rows(c.execute(f"SELECT i.*, a.display_name AS account_name, a.handle AS account_handle FROM items i {join} LEFT JOIN accounts a ON a.id=i.account_id {w} ORDER BY {ob}, i.id DESC LIMIT ? OFFSET ?", args + [int(limit), int(offset)]))  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
+    res = rows(c.execute(f"SELECT i.*, a.display_name AS account_name, a.handle AS account_handle, a.platform AS account_platform FROM items i {join} LEFT JOIN accounts a ON a.id=i.account_id {w} ORDER BY {ob}, i.id DESC LIMIT ? OFFSET ?", args + [int(limit), int(offset)]))  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
     return {"total": total, "items": res}
 
 def all_tags(limit=100):
