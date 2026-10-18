@@ -211,7 +211,7 @@ def _sync_state(what: str, platform: str, account: str, **kw) -> None:
 async def collect(platform: str, account: Optional[str] = None, max_items: Optional[int] = None, unsave: Optional[bool] = None) -> dict:
     """Run the collector for a platform and store new saves in SaveHub, tagged with the account they came from
     (linked account_id + source=collector:<platform>:<handle>). account = handle like '@me'; omit to collect every logged-in account.
-    max_items caps items per account (default 200; icloud: per kind, files and contacts). Un-save is OFF by default:
+    max_items caps items per account (default 500 on a first full collect; icloud: per kind, files and contacts). Un-save is OFF by default:
     unsave=true un-saves on the real app for this call; unsave=false never does; omitted = the per-account dashboard setting
     (Accounts page toggle, default off). Items are un-saved only after each one is confirmed stored, never by auto-sync, and it
     is refused for read-only collectors (icloud, messenger, whatsapp, wechat). Needs a saved session (sign in on the dashboard

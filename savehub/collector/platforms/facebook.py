@@ -92,6 +92,37 @@ class FacebookCollector(FeedCollector):
              "JSON. Un-save: entry More -> Unsave on /saved, verified.")
     SEL, LOGIN_URL_RE, EXTRACT_JS = FB_SEL, FB_LOGIN_RE, FB_EXTRACT_JS
     XHR_RE = re.compile(r"facebook\.com/api/graphql", re.I)
+    # /saved lazy-loads inside a nested scroller; window.scrollBy alone often stops after the first screenful
+    FB_SCROLL_JS = r"""() => {
+      const main = document.querySelector('[role="main"]') || document.body;
+      const more = [...main.querySelectorAll('[aria-label="More"], [aria-label^="More options"]')].pop();
+      if (more) { try { more.scrollIntoView({block: 'end', inline: 'nearest'}); } catch (e) {} }
+      let el = more || main, scrolled = false;
+      while (el && el !== document.documentElement) {
+        const st = getComputedStyle(el);
+        if (el.scrollHeight > el.clientHeight + 8 && /(auto|scroll)/.test(st.overflowY || '')) {
+          el.scrollTop += Math.max(400, Math.round(el.clientHeight * 0.9));
+          scrolled = true; break;
+        }
+        el = el.parentElement;
+      }
+      if (!scrolled) window.scrollBy(0, Math.round(window.innerHeight * 0.9));
+      // nudge the document scroller too (some /saved layouts use both)
+      document.scrollingElement && (document.scrollingElement.scrollTop += Math.round(window.innerHeight * 0.5));
+    }"""
+
+    def scroll(self, page):
+        page.evaluate(self.FB_SCROLL_JS)
+
+    def scroll_loop(self, page, cfg, session_file, label, items, extract=None, scroll=None):
+        # Facebook /saved often needs a few empty rounds while the next batch paints
+        idle_was = cfg.idle_rounds
+        if idle_was < 6:
+            cfg.idle_rounds = 6
+        try:
+            return super().scroll_loop(page, cfg, session_file, label, items, extract=extract, scroll=scroll)
+        finally:
+            cfg.idle_rounds = idle_was
 
     def parse_dom(self, r):
         url = clean_url(r.get("href") or "")

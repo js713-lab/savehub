@@ -90,7 +90,7 @@ class CollectedItem:
 @dataclass
 class RunConfig:
     """Per-run options. Un-save is OFF by default and, even when on, DRY-RUN unless unsave_confirm is true."""
-    max_items: int = 200            # hard cap of items collected per run
+    max_items: int = 500            # hard cap per run; first full collect (no known) aims to empty the list up to this
     scroll_delay: float = 1.8       # seconds between scrolls (plus jitter) - be polite
     scroll_jitter: float = 0.8
     idle_rounds: int = 4            # stop after this many scrolls without new items

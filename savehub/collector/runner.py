@@ -53,6 +53,12 @@ def run_collect(platform: str, cfg: RunConfig, sink=None, sessions_dir=None, bro
     except ValueError as e: raise CollectorError(str(e)) from None
     acct = "" if akey == sessions.DEFAULT_ACCOUNT else akey
     sfile = sessions.session_path(platform, sessions_dir, akey)
+    if not sfile.exists() and platform == "messenger":
+        # Same Meta login: a fresh Facebook session often unlocks messenger.com via "Continue as"
+        fb = sessions.session_path("facebook", sessions_dir, akey)
+        if fb.exists() and sessions.describe(fb).get("status") == "saved":
+            sfile = fb
+            ev("messenger.reuse_facebook_session", account=acct or "default")
     if not sfile.exists(): raise NeedLogin(platform, sfile, "no saved session file", acct)
     if cfg.unsave and not col.supports_unsave:
         raise CollectorError(f"'{platform}' has no un-save action (its collector gathers {col.kind}); drop --unsave")

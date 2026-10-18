@@ -51,8 +51,9 @@ class ContactsCollector(FeedCollector):
 MS_SEL = {
     "row": 'a[href*="/t/"]',
     "item": 'a[href*="/t/"]',
-    "logged_in": '[aria-label="Chats"], [aria-label="New message"], a[href*="/t/"], [aria-label="Thread list"]',
+    "logged_in": '[aria-label="Chats"], [aria-label="New message"], a[href*="/t/"], [aria-label="Thread list"], [aria-label="Conversation list"]',
     "login_form": 'input[name="email"], input[name="pass"], #loginbutton, button[name="login"], form[action*="login"]',
+    "continue_as": 'div[role="button"]:has-text("Continue as"), button:has-text("Continue as"), [aria-label*="Continue as" i]',
 }
 MS_LOGIN_RE = re.compile(r"^https?://(?:www\.)?(?:messenger|facebook)\.com/(?:login|checkpoint|recover)", re.I)
 MS_THREAD_RE = re.compile(r"^(?:https?://(?:www\.)?(messenger|facebook)\.com)?(/messages)?/(e2ee/)?t/([\w.-]+)")
@@ -81,9 +82,68 @@ class MessengerCollector(ContactsCollector):
     login_url = "https://www.messenger.com/login/"
     saved_url = "https://www.messenger.com/ (chat list -> contacts)"
     notes = ("CONTACTS collector (Messenger has no saved-posts view): every conversation in the chat list (person/group, "
-             "thread URL, avatar, last-message preview in extra). Works on messenger.com or facebook.com/messages. "
+             "thread URL, avatar, last-message preview in extra). Works on messenger.com or facebook.com/messages "
+             "(falls back automatically; uses Continue as when Facebook cookies are present). "
              "Message contents are E2EE and not read. No un-save.")
     SEL, LOGIN_URL_RE, EXTRACT_JS = MS_SEL, MS_LOGIN_RE, MS_EXTRACT_JS
+    FB_MESSAGES = "https://www.facebook.com/messages/"
+
+    def is_login_page(self, page) -> bool:
+        u = (page.url or "").lower()
+        if "checkpoint" in u: return True
+        return super().is_login_page(page)
+
+    def ensure_logged_in(self, page, session_file) -> None:
+        from ..base import NeedLogin
+        u = page.url or ""
+        if "checkpoint" in u.lower():
+            raise NeedLogin(self.platform, session_file,
+                            f"checkpoint - verification code needed ({u})")
+        super().ensure_logged_in(page, session_file)
+
+    def _click_continue_as(self, page) -> bool:
+        sel = self.SEL.get("continue_as") or ""
+        if not sel: return False
+        try:
+            loc = page.locator(sel).first
+            if loc.count() and loc.is_visible(timeout=1500):
+                loc.click(timeout=5000)
+                page.wait_for_timeout(2000)
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _inbox_ready(self, page) -> bool:
+        return self.is_logged_in(page) and not self.is_login_page(page)
+
+    def open(self, page, url, cfg, session_file=""):
+        """messenger.com first (Continue as if FB cookies present), then facebook.com/messages."""
+        from ..logutil import ev
+        for attempt, target in enumerate((url or self.home_url, self.FB_MESSAGES)):
+            ev("messenger.open", url=target, attempt=attempt)
+            page.goto(target, wait_until="domcontentloaded", timeout=cfg.page_timeout_ms)
+            self.wait_ready(page, min(cfg.page_timeout_ms, 20000))
+            if self._inbox_ready(page):
+                return
+            if self._click_continue_as(page):
+                self.wait_ready(page, min(cfg.page_timeout_ms, 20000))
+                if self._inbox_ready(page):
+                    return
+            # cookie consent / "Not now" for notifications — ignore failures
+            for dismiss in ('div[role="button"]:has-text("Not now")', 'button:has-text("Not Now")',
+                            'div[role="button"]:has-text("Allow all cookies")'):
+                try:
+                    d = page.locator(dismiss).first
+                    if d.count() and d.is_visible(timeout=400): d.click(timeout=2000); page.wait_for_timeout(800)
+                except Exception: pass
+            if self._inbox_ready(page):
+                return
+        self.ensure_logged_in(page, session_file)
+
+    def targets(self, page, cfg, session_file=""):
+        # Prefer messenger.com; open() falls back to facebook.com/messages if needed
+        return [(self.home_url, "")]
 
     def parse_dom(self, r):
         m = MS_THREAD_RE.match(r.get("href") or "")

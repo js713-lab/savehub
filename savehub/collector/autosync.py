@@ -24,7 +24,7 @@ from . import sessions, runtime
 
 DEFAULT_INTERVAL, MIN_INTERVAL, MAX_INTERVAL = 10, 2, 1440          # minutes
 DEFAULT_MAX_ITEMS = int(os.environ.get("SAVEHUB_AUTOSYNC_MAX_ITEMS", "30"))         # per incremental run
-FIRST_RUN_MAX_ITEMS = int(os.environ.get("SAVEHUB_AUTOSYNC_FIRST_MAX_ITEMS", "100"))  # first sync of an account
+FIRST_RUN_MAX_ITEMS = int(os.environ.get("SAVEHUB_AUTOSYNC_FIRST_MAX_ITEMS", "500"))  # first sync empties the list (up to this)
 DEFAULT_TIMEOUT_S = int(os.environ.get("SAVEHUB_AUTOSYNC_TIMEOUT", "300"))          # per account
 STOP_AFTER_KNOWN = 3
 MAX_BACKOFF_S = 6 * 3600

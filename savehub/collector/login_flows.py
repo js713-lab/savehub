@@ -128,6 +128,9 @@ def _classify(page, f: LoginFlow) -> tuple:
     if f.success_sel() and _visible(page, f.success_sel()): return ("connected", "", {})
     if f.captcha and _visible(page, f.captcha): return ("needs_captcha", "the app showed a captcha; solve it in the browser on the box", {})
     if f.otp and _visible(page, f.otp): return ("needs_code", "the app asked for a verification code (2FA/OTP)", {})
+    # Meta checkpoint pages (often before the OTP field paints) — surface needs_code instead of hanging
+    if "checkpoint" in (page.url or "").lower():
+        return ("needs_code", "the app opened a checkpoint; enter the verification code on the dashboard", {})
     if f.qr and _visible(page, f.qr): return ("needs_qr", "the app wants a QR scan", {})
     if f.error and _visible(page, f.error): return ("wrong_password", "the app rejected the username or password", {})
     return ("", "", {})
@@ -182,6 +185,15 @@ def run_browser_login(page, platform: str, username: str, password: str, *, wait
         except Exception: pass
         page.goto(f.login_url, wait_until="domcontentloaded")
         page.wait_for_timeout(700); _dismiss_banners(page)
+        # Already signed into Facebook in this browser: Messenger/FB often offer "Continue as …"
+        if platform in ("messenger", "facebook") and _visible(page, 'div[role="button"]:has-text("Continue as"), button:has-text("Continue as")'):
+            try:
+                page.locator('div[role="button"]:has-text("Continue as"), button:has-text("Continue as")').first.click()
+                page.wait_for_timeout(1500)
+                st, detail, data = _settle(page, f, settle_ms)
+                if st == "connected": return (st, detail, data)
+            except Exception:
+                pass
         if f.identifier:
             page.wait_for_selector(f.identifier, timeout=settle_ms)
             _fill(page, f.identifier, username)
