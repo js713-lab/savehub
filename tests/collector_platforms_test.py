@@ -454,8 +454,56 @@ def test_whatsapp_dom_fallback_login_and_session_idb(browser, tmp_path):
     assert "model-storage" in dbs
 
 
-def test_wechat_stays_stub_with_reason():
-    c = get_collector("wechat")
-    assert not c.implemented and "no usable web client" in c.notes
+def wechat_fake():
+    """Fixture used by e2e_all_apps_test (and the unit test below)."""
+    import json as _j
+    f = Fake({"filehelper.weixin.qq.com", "szfilehelper.weixin.qq.com"}, [], r"^/__never", "wechat_login.html", None)
+    INIT = {"BaseResponse": {"Ret": 0}, "SyncKey": {"Count": 1, "List": [{"Key": 1, "Val": 1}]}, "AddMsgList": []}
+    SYNC = {"BaseResponse": {"Ret": 0}, "AddMsgList": [
+        {"MsgId": "9001", "MsgType": 49, "AppMsgType": 5, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1700000010,
+         "FileName": "吉隆坡咖啡馆", "Content": "<title>吉隆坡咖啡馆</title><des>kopi</des><url>https://www.xiaohongshu.com/explore/abc9001</url>"},
+        {"MsgId": "9002", "MsgType": 1, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1700000005,
+         "Content": "see https://www.nasa.gov/artemis/9002 and more"},
+        {"MsgId": "9003", "MsgType": 49, "AppMsgType": 6, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1700000001,
+         "FileName": "notes.pdf", "FileSize": "12000", "Content": "<title>notes.pdf</title>"}]}
+    f.pages = [(r"^/$", lambda m, f, r: fx("wechat_filehelper.html")),
+               (r"^/cgi-bin/mmwebwx-bin/webwxinit", lambda m, f, r: (200, "application/json", _j.dumps(INIT))),
+               (r"^/cgi-bin/mmwebwx-bin/webwxsync", lambda m, f, r: (200, "application/json", _j.dumps(SYNC)))]
+    return f
+
+
+def test_wechat_filehelper_collect(browser, tmp_path):
+    """WeChat automatic collector: official web File Transfer Assistant (JSON XHR + DOM fallback)."""
+    from savehub.collector.platforms.wechat import parse_msg
+    # unit: parse AddMsgList entries (link / text / file)
+    link = parse_msg({"MsgId": "1001", "MsgType": 49, "AppMsgType": 5, "ToUserName": "filehelper", "FromUserName": "@me",
+                      "Content": "<title>NASA</title><des>space</des><url>https://www.nasa.gov/x</url>", "CreateTime": 1700000000, "FileName": "NASA"})
+    assert link["id"] == "1001" and link["url"] == "https://www.nasa.gov/x" and link["title"] == "NASA"
+    assert parse_msg({"MsgId": "2", "MsgType": 51}) is None                                 # status notify ignored
+    assert parse_msg({"MsgId": "3", "MsgType": 1, "ToUserName": "@other", "FromUserName": "@me", "Content": "hi"}) is None
+    f = Fake({"filehelper.weixin.qq.com", "szfilehelper.weixin.qq.com"}, [], r"^/__never", "wechat_login.html", None)
+    INIT = {"BaseResponse": {"Ret": 0}, "SyncKey": {"Count": 1, "List": [{"Key": 1, "Val": 1}]},
+            "AddMsgList": [{"MsgId": "51", "MsgType": 51, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1}]}
+    SYNC = {"BaseResponse": {"Ret": 0}, "AddMsgList": [
+        {"MsgId": "9001", "MsgType": 49, "AppMsgType": 5, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1700000010,
+         "FileName": "吉隆坡咖啡馆", "Content": "<title>吉隆坡咖啡馆</title><des>kopi</des><url>https://www.xiaohongshu.com/explore/abc9001</url>"},
+        {"MsgId": "9002", "MsgType": 1, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1700000005,
+         "Content": "see https://www.nasa.gov/artemis/9002 and more"},
+        {"MsgId": "9003", "MsgType": 49, "AppMsgType": 6, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1700000001,
+         "FileName": "notes.pdf", "FileSize": "12000", "Content": "<title>notes.pdf</title>"}]}
+    f.pages = [(r"^/$", lambda m, f, r: fx("wechat_filehelper.html")),
+               (r"^/cgi-bin/mmwebwx-bin/webwxinit", lambda m, f, r: (200, "application/json", __import__("json").dumps(INIT))),
+               (r"^/cgi-bin/mmwebwx-bin/webwxsync", lambda m, f, r: (200, "application/json", __import__("json").dumps(SYNC)))]
+    items = collect(browser, f, "wechat")
+    by = {i.external_id: i for i in items}
+    assert set(by) == {"9001", "9002", "9003"}
+    assert "xiaohongshu.com/explore/abc9001" in by["9001"].url and by["9001"].title == "吉隆坡咖啡馆"
+    assert by["9002"].url == "https://www.nasa.gov/artemis/9002"
+    assert by["9003"].url.endswith("#msg/9003") and by["9003"].extra.get("app_type") == "file"
+    col = get_collector("wechat")
+    assert col.implemented and col.supports_unsave is False and col.needs_indexed_db
+    f2 = Fake({"filehelper.weixin.qq.com"}, [], r"^/__never", "wechat_login.html", None)
+    f2.pages = [(r"^/$", lambda m, f, r: fx("wechat_login.html"))]
+    assert_need_login(browser, tmp_path, f2, "wechat", "filehelper.weixin.qq.com", "")
     impl = sorted(k for k, v in REGISTRY.items() if v.implemented)
-    assert impl == ["douyin", "facebook", "icloud", "instagram", "messenger", "threads", "tiktok", "whatsapp", "x", "xiaohongshu"]
+    assert impl == ["douyin", "facebook", "icloud", "instagram", "messenger", "threads", "tiktok", "wechat", "whatsapp", "x", "xiaohongshu"]

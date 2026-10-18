@@ -117,7 +117,9 @@ def _run_collect_locked(col, platform, cfg, sink, sfile, acct, browser, context_
     if not getattr(col, "uses_browser", True):                          # API collector (iCloud): no browser, never un-saves
         summary["backend"] = summary["backend_setting"] = getattr(col, "backend", "api")
         if sink is not None and hasattr(sink, "known_keys"):            # every stored version, not only the newest page:
-            cfg.known = sink.known_keys(platform, limit=200000)         # unchanged files are skipped before any download
+            # iCloud file/contact versions are unique per library URL (UNIQUE platform+url): use every stored version so a
+            # second Apple ID does not re-download the same unchanged files. Social apps stay per-account (see cli).
+            cfg.known = sink.known_keys(platform, limit=200000, account="" if platform == "icloud" else acct)
         items, info = col.collect_api(state, cfg, sfile, acct)          # refreshes (or marks rejected) the session file itself
         summary.update({k: v for k, v in info.items() if k != "backend"})
         _push(col, items, cfg, sink, acct, collected_at, summary)
@@ -139,7 +141,7 @@ def _run_collect_locked(col, platform, cfg, sink, sfile, acct, browser, context_
             items = col.collect(page, cfg, sfile)
             results = _push(col, items, cfg, sink, acct, collected_at, summary)
             if cfg.unsave:
-                summary["unsave"] = _unsave(col, page, [r for r in results if r.confirmed and not r.error], cfg, sfile)
+                summary["unsave"] = _unsave(col, page, [r for r in results if r.confirmed and not r.error and r.id], cfg, sfile, sink)
             sessions.save_state(ctx, sfile, col.needs_indexed_db)                   # keep refreshed cookies for next run
     state = None
     summary["elapsed_s"] = round(time.time() - started, 1)
@@ -169,9 +171,20 @@ def _push(col, items, cfg, sink, acct, collected_at, summary) -> list:
     return results
 
 
-def _unsave(col, page, confirmed, cfg, sfile) -> dict:
-    """Only items confirmed stored in SaveHub reach here. Dry run unless cfg.unsave_confirm."""
-    out = {"mode": cfg.unsave_mode, "would_unsave": [], "unsaved": [], "already_unsaved": [], "failed": [], "skipped_cap": 0}
+UNSAVE_STATES = ("unsaved", "already_unsaved", "failed")
+
+
+def _unsave(col, page, confirmed, cfg, sfile, sink=None) -> dict:
+    """Only items confirmed stored in SaveHub reach here (pushed, then read back). Dry run unless cfg.unsave_confirm.
+    A failed un-save never touches the stored item; the outcome is recorded (summary + the item's raw.unsave)."""
+    out = {"mode": cfg.unsave_mode, "would_unsave": [], "unsaved": [], "already_unsaved": [], "failed": [], "skipped_cap": 0, "errors": {}}
+    record = getattr(sink, "record_unsave", None)
+
+    def note(r, st, err=""):
+        if record is None: return
+        try: record(r.id, st, err)
+        except Exception as e: ev("unsave.record_failed", logging.WARNING, savehub_id=r.id, error=scrub(str(e))[:200])
+
     for i, r in enumerate(confirmed):
         url = r.item.url
         if not cfg.unsave_confirm:
@@ -179,11 +192,23 @@ def _unsave(col, page, confirmed, cfg, sfile) -> dict:
             continue
         if len(out["unsaved"]) + len(out["failed"]) >= cfg.max_unsave:
             out["skipped_cap"] = len(confirmed) - i; ev("unsave.cap_reached", max_unsave=cfg.max_unsave); break
+        err = ""
         try: st = col.unsave(page, r.item, cfg, sfile)
-        except NeedLogin: raise
-        except Exception as e: st = "failed"; ev("unsave.error", logging.WARNING, url=url, error=str(e)[:200])
-        out[st].append(url); ev("unsave." + st, url=url, savehub_id=r.id)
+        except NeedLogin as e:
+            # the app logged us out mid-way: everything is still stored; stop un-saving, the run reports need_login
+            out["failed"].append(url); out["errors"][url] = "need login"; note(r, "failed", "need login")
+            out["skipped_cap"] = len(confirmed) - i - 1
+            raise
+        except Exception as e:
+            st, err = "failed", scrub(f"{type(e).__name__}: {e}")[:200]; ev("unsave.error", logging.WARNING, url=url, error=err)
+        if st not in UNSAVE_STATES:
+            err = err or f"unexpected un-save result {st!r}"; st = "failed"
+        out[st].append(url)
+        if err: out["errors"][url] = err
+        note(r, st, err)
+        ev("unsave." + st, url=url, savehub_id=r.id)
         page.wait_for_timeout(int(1000 * cfg.unsave_delay))
+    if not out["errors"]: out.pop("errors")
     return out
 
 

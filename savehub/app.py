@@ -315,6 +315,190 @@ async def collector_backend(req: Request):
     except ValueError as e: raise HTTPException(400, str(e))
     return a.status()
 
+# ---- automatic sign-in (credentials -> encrypted vault -> headless login -> first collect) ----
+# Passwords arrive ONLY here (authenticated dashboard / single-use connect page, JSON POST) and go straight into the
+# vault (AES-256-GCM). No endpoint ever returns one; responses carry status metadata only.
+_HANDLE_RE = re.compile(r"[^a-z0-9._-]+")
+
+def _handle_from(username: str) -> str:
+    h = (username or "").strip().lstrip("@").lower().split("@")[0]
+    h = _HANDLE_RE.sub("", h).strip("._-")[:64]
+    return h or "me"
+
+def _autologin():
+    from .collector import autologin, platforms  # noqa: F401
+    return autologin
+
+def _connect_one(platform: str, username: str, password: str, handle: str = "", display_name: str = "") -> dict:
+    """Create/find the account row, store the login in the vault, enqueue the automatic sign-in. Never echoes the password."""
+    from .collector import login_flows, sessions as _s
+    if platform not in db.PLATFORMS or platform == "web": raise HTTPException(400, f"unknown platform: {platform}")
+    pw_login = login_flows.supports_password_login(platform)
+    if pw_login and (not isinstance(password, str) or not password): raise HTTPException(400, "password required")
+    if pw_login and (not isinstance(username, str) or not username.strip()): raise HTTPException(400, "username required")
+    try: key = _s.account_key(handle or _handle_from(username or display_name or "me"))
+    except ValueError as e: raise HTTPException(400, str(e))
+    aid, _ = db.add_account({"platform": platform, "handle": "@" + key, "display_name": display_name or "@" + key,
+                             "connected_via": "autologin", "linked_email": username.strip() if isinstance(username, str) and "@" in username else ""})
+    if pw_login:
+        try: vault.set_login(aid, username, password)
+        except vault.VaultError as e: raise HTTPException(e.status, str(e))
+    password = None                                                                   # noqa: F841
+    r = _autologin().enqueue(platform, key)
+    return {"platform": platform, "account": "@" + key, "account_id": aid, "status": r.get("status"),
+            "login": "password" if pw_login else "qr"}
+
+@app.post("/api/accounts/connect")
+async def connect_account(req: Request):
+    """Dashboard 'Add account (automatic sign-in)': {platform, username, password, handle?, display_name?}."""
+    _vault_guard(req)
+    d = await req.json()
+    if not isinstance(d, dict): raise HTTPException(400, "JSON object required")
+    r = _connect_one(str(d.get("platform") or ""), d.get("username") or "", d.get("password") or "", str(d.get("handle") or ""), str(d.get("display_name") or ""))
+    d.clear()
+    return JSONResponse(r, headers=NO_STORE)
+
+@app.post("/api/accounts/{aid}/autologin")
+async def relogin_account(aid: int, req: Request):
+    """Retry the automatic sign-in with the saved vault login (or a new one: {username, password})."""
+    _vault_guard(req)
+    a = db.get_account(aid)
+    if not a: raise HTTPException(404)
+    d = await req.json() if (await req.body()) else {}
+    if d.get("password"):
+        try: vault.set_login(aid, d.get("username") or a.get("linked_email") or a.get("handle") or "", d["password"])
+        except vault.VaultError as e: raise HTTPException(e.status, str(e))
+    d.clear()
+    from .collector import sessions as _s
+    r = _autologin().enqueue(a["platform"], _s.account_key(a["handle"]))
+    return JSONResponse({"account_id": aid, "status": r.get("status")}, headers=NO_STORE)
+
+@app.delete("/api/accounts/{aid}/autologin")
+async def delete_login(aid: int, req: Request):
+    _vault_guard(req); return JSONResponse(vault.delete_login(aid), headers=NO_STORE)
+
+@app.post("/api/autologin/code")
+async def autologin_code(req: Request):
+    """{platform, account, code}: resume the waiting sign-in (2FA / OTP / e-mail or SMS code) in its live browser."""
+    _admin_guard(req)
+    d = await req.json()
+    if not isinstance(d, dict) or set(d) - {"platform", "account", "code"}: raise HTTPException(400, "send {platform, account, code}")
+    code = str(d.get("code") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9-]{4,12}", code): raise HTTPException(400, "the code should be 4-12 letters/digits")
+    try: r = _autologin().submit_code(str(d.get("platform") or ""), str(d.get("account") or ""), code)
+    except ValueError as e: raise HTTPException(400, str(e))
+    if not r.get("ok"): raise HTTPException(409, r.get("error"))
+    return r
+
+@app.get("/api/autologin")
+def autologin_status(req: Request):
+    """Per-account sign-in + sync status for the dashboard cards (no credentials, no cookies)."""
+    _admin_guard(req, write=False)
+    al = _autologin(); seen, out = set(), []
+    from .collector import sessions as _s
+    for a in db.list_accounts("", None, None, "platform", "asc", 5000)["accounts"]:
+        h = db.norm_handle(a.get("handle"))
+        try: k = _s.account_key(h)
+        except ValueError: continue
+        if a["platform"] == "web" or k == _s.DEFAULT_ACCOUNT: continue
+        if a.get("connected_via") not in ("autologin", "collector") and not vault.has_login(a["id"]) and not _s.session_path(a["platform"], None, k).exists(): continue
+        seen.add((a["platform"], k)); out.append(al.account_status(a["platform"], k))
+    for (p, k) in al.all_jobs():
+        if (p, k) not in seen: out.append(al.account_status(p, k))
+    return JSONResponse({"accounts": out}, headers=NO_STORE)
+
+@app.get("/api/autologin/qr")
+def autologin_qr(req: Request, platform: str, account: str):
+    """The live sign-in QR code (WeChat / WhatsApp / Douyin) as PNG, only while that login is waiting for a scan."""
+    _admin_guard(req, write=False)
+    import base64 as _b64
+    try: q = _autologin().qr_image(platform, account)
+    except ValueError as e: raise HTTPException(400, str(e))
+    if not q: raise HTTPException(404, "no QR code is waiting for that account")
+    from fastapi.responses import Response
+    return Response(_b64.b64decode(q.split(",", 1)[1]), media_type="image/png", headers=NO_STORE)
+
+# ---- un-save setting (manual collects only; auto-sync never un-saves) ----
+@app.get("/api/collector/unsave")
+def unsave_settings(req: Request):
+    _admin_guard(req, write=False); return db.get_unsave_settings()
+
+@app.put("/api/collector/unsave")
+async def put_unsave(req: Request):
+    """{platform, account?, enabled: true|false|null}. OFF by default. Only the MCP/CLI manual collect honours it;
+    auto-sync and 'Sync now' never un-save. Refused for read-only collectors (contacts, iCloud, WeChat)."""
+    _admin_guard(req)
+    d = await req.json()
+    if not isinstance(d, dict) or set(d) - {"platform", "account", "enabled"} or "platform" not in d: raise HTTPException(400, "send {platform, account?, enabled}")
+    a = _autosync(); p = d["platform"]
+    cls = a.REGISTRY.get(p)
+    if cls is None or not cls.implemented: raise HTTPException(400, "unknown platform")
+    if d.get("enabled") is not None and not isinstance(d.get("enabled"), bool): raise HTTPException(400, "enabled must be true, false or null")
+    if d.get("enabled") and not cls.supports_unsave: raise HTTPException(400, f"'{p}' is read-only (no un-save action)")
+    from .collector import sessions as _s
+    try: acct = _s.account_key(d.get("account") or "")
+    except ValueError as e: raise HTTPException(400, str(e))
+    return db.set_unsave(p, "" if acct == _s.DEFAULT_ACCOUNT else acct, d.get("enabled"))
+
+# ---- MCP connect link (/connect/<token>): username + password per app, never through the MCP client ----
+CONNECT_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SaveHub · connect apps</title><link rel="stylesheet" href="/static/style.css"></head><body><main class="panel" style="max-width:560px;margin:32px auto">
+<h2>Connect your apps</h2><p class="muted">Your password goes straight into SaveHub's encrypted vault (AES-256-GCM) on this server and is used only to sign in to the app.
+It is never shown again, never sent to the AI assistant, and this link works once (15 minutes).</p>
+<form id="f">__FIELDS__<button class="btn" type="submit">Connect and start syncing</button></form><div id="out" class="small"></div></main>
+<script>
+const T = __TARGETS__;
+document.getElementById('f').addEventListener('submit', async (e) => { e.preventDefault();
+  const accounts = T.map((t, i) => ({platform: t.platform, account: t.account, username: (document.getElementById('u' + i) || {}).value || '',
+                                     password: (document.getElementById('p' + i) || {}).value || ''}));
+  const r = await fetch(location.pathname.replace('/connect/', '/api/connect/'), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({accounts})});
+  const j = await r.json().catch(() => ({}));
+  document.querySelectorAll('input[type=password]').forEach(x => x.value = '');
+  document.getElementById('out').textContent = r.ok ? 'Signing in… you can close this page; the assistant can follow the progress.' : ('Error: ' + (j.detail || r.status));
+  if (r.ok) document.getElementById('f').remove(); });
+</script></body></html>"""
+
+@app.get("/connect/{token}", response_class=HTMLResponse)
+def connect_page(token: str):
+    from . import connect as cl
+    from .collector import login_flows
+    t = cl.peek(token)
+    if not t: raise HTTPException(410, "this connect link has expired or was already used; ask the assistant for a new one")
+    import html as _h, json as _j
+    rows = []
+    for i, x in enumerate(t["targets"]):
+        name = db.PLATFORMS.get(x["platform"], {}).get("name", x["platform"])
+        if login_flows.supports_password_login(x["platform"]):
+            rows.append(f'<fieldset class="panel"><legend>{_h.escape(name)} · {_h.escape(x["account"])}</legend>'
+                        f'<label>Username / e-mail / phone <input id="u{i}" autocomplete="username" required></label>'
+                        f'<label>Password <input id="p{i}" type="password" autocomplete="current-password" required></label></fieldset>')
+        else:
+            rows.append(f'<fieldset class="panel"><legend>{_h.escape(name)} · {_h.escape(x["account"])}</legend>'
+                        f'<p class="small">Signs in by QR code: after you press Connect, the dashboard Accounts page shows the code to scan.</p></fieldset>')
+    page = CONNECT_PAGE.replace("__FIELDS__", "".join(rows)).replace("__TARGETS__", _j.dumps(t["targets"]).replace("</", "<\\/"))
+    return HTMLResponse(page, headers={**NO_STORE, "Referrer-Policy": "no-referrer"})
+
+@app.post("/api/connect/{token}")
+async def connect_submit(token: str, req: Request):
+    from . import connect as cl
+    if "application/json" not in req.headers.get("content-type", ""): raise HTTPException(415, "application/json required")
+    if not same_origin(req): raise HTTPException(403, "cross-origin request refused")
+    d = await req.json()
+    t = cl.peek(token)
+    if not t: raise HTTPException(410, "this connect link has expired or was already used")
+    allowed = {(x["platform"], x["account"]) for x in t["targets"]}
+    subs = d.get("accounts") if isinstance(d, dict) else None
+    if not isinstance(subs, list) or not subs: raise HTTPException(400, "accounts required")
+    for x in subs:
+        if not isinstance(x, dict) or (x.get("platform"), x.get("account")) not in allowed: raise HTTPException(403, "that app/account is not part of this link")
+    if not cl.consume(token): raise HTTPException(410, "this connect link has expired or was already used")
+    out = []
+    for x in subs:
+        try: out.append(_connect_one(x["platform"], x.get("username") or "", x.get("password") or "", x["account"]))
+        except HTTPException as e: out.append({"platform": x["platform"], "account": x["account"], "status": "error", "error": e.detail})
+        x.pop("password", None)
+    return JSONResponse({"accounts": out}, headers=NO_STORE)
+
 # ---- settings ----
 def _redact(s):
     s = dict(s); s.pop("x_tokens", None)

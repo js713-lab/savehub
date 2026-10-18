@@ -40,7 +40,7 @@ async def stdio_test():
                 ("login_status", {"platform": "x", "account": "@me"}),
                 ("collect", {"platform": "x"}),                       # no session -> need_login, returns immediately
                 ("collect", {"platform": "instagram", "account": "@me"}),   # implemented, no session -> need_login
-                ("collect", {"platform": "wechat"}),                         # stub collector -> not_implemented
+                ("collect", {"platform": "wechat"}),                         # automatic filehelper collector, no session -> need_login
                 ("login_status", {"platform": "icloud", "account": "@me"}),  # on-box terminal login, no session yet
                 ("collect", {"platform": "icloud", "account": "@me"}),       # API collector, no session -> need_login
             ]
@@ -56,7 +56,7 @@ async def stdio_test():
                     if args.get("platform") == "icloud" and ("savehub.collector login icloud" not in res["fix"] or res.get("login") != "terminal"): fails.append("login_status icloud")
                 elif name == "collect":
                     brief = res
-                    if res.get("status") not in ("need_login", "not_implemented"): fails.append(name)
+                    if res.get("status") not in ("need_login", "not_implemented", "browser_unavailable", "collector_unavailable"): fails.append(name)
                 elif isinstance(res, dict) and "items" in res: brief = {"total": res["total"], "titles": [i["title"][:40] for i in res["items"][:3]], "platforms": sorted({i["platform"] for i in res["items"]})}
                 elif isinstance(res, dict) and name == "get_summary": brief = {"total": res["total"], "by_platform": res["by_platform"], "digest": res["digest"][:120]}
                 elif isinstance(res, dict) and "accounts" in res: brief = {"total": res["total"], "handles": [a["handle"] for a in res["accounts"]]}
@@ -64,7 +64,7 @@ async def stdio_test():
                 elif isinstance(res, dict) and name == "get_item": brief = {k: res.get(k) for k in ("id", "title", "tags")}
                 else: brief = res
                 print(f"  {name}({json.dumps(args, ensure_ascii=False)[:70]}) -> {json.dumps(brief, ensure_ascii=False)[:300]}")
-            assert {"login_status", "collect"} <= set(tools) and len(tools) == 17, tools
+            assert {"login_status", "collect", "connect_apps", "connection_status"} <= set(tools) and len(tools) == 19, tools
             assert not fails, fails
             print("STDIO: all tool calls OK")
 

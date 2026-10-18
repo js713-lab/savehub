@@ -465,11 +465,16 @@ def test_password_never_in_mcp_or_rest_schemas():
             assert not bad.search(prop), (t.name, prop)
     spec = webapp.app.openapi()
     for path, ops in spec["paths"].items():
-        assert "icloud" not in path.lower() and "login" not in path.lower(), path
-        for op in ops.values():
-            for p in op.get("parameters", []): assert not bad.search(p["name"]), (path, p["name"])
+        assert "icloud" not in path.lower(), path                                   # no iCloud-specific REST surface
+        # generic /api/autologin/* and /api/accounts/*/autologin are OK (credentials go to the vault, never returned)
+        for op in (ops.values() if isinstance(ops, dict) else []):
+            if not isinstance(op, dict): continue
+            for p in op.get("parameters", []):
+                if ("/connect" in path) and p["name"] == "token": continue           # single-use connect link id
+                assert not bad.search(p["name"]), (path, p["name"])
+            # OpenAPI bodies for Request.json() endpoints are untyped; still refuse an explicit apple_id field
             body = json.dumps(op.get("requestBody", {}))
-            assert not re.search(r'"(password|apple_id|otp|code)"', body), path
+            assert "apple_id" not in body, path
 
 
 def test_password_env_never_reaches_children(monkeypatch):
@@ -600,4 +605,4 @@ def test_icloud_connect_card_detail_does_not_repeat_login_commands():
     # the Connect apps card prints the login / login-terminal commands itself; the detail text must not repeat them
     from savehub import db
     d = db.PLATFORMS["icloud"]["detail"]
-    assert "python -m" not in d and "never stored" in d
+    assert "python -m" not in d and "never stored" in d and "encrypted vault" in d

@@ -1,0 +1,47 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Facebook</title></head>
+<body>
+<div id="login_view">
+<form id="login_form">
+<input type="text" name="email" id="email" autocomplete="username">
+<input type="password" name="pass" id="pass" autocomplete="current-password">
+<button type="submit" name="login" id="loginbutton">Log in</button>
+</form>
+<div id="error_box" hidden>The password you entered is incorrect.</div>
+</div>
+<div id="otp_view" hidden>
+<form id="otp_form">
+<input name="approvals_code" autocomplete="one-time-code">
+<button type="submit" id="checkpointSubmitButton">Continue</button>
+</form>
+</div>
+<div id="home_view" hidden>
+<div aria-label="Your profile">Me</div>
+<a href="/notifications/">Notifications</a>
+</div>
+<script>
+const MODE = "__MODE__";
+document.getElementById('login_form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const p = document.getElementById('pass').value;
+  if (MODE === 'wrong' || p === 'bad') { document.getElementById('error_box').hidden = false; return; }
+  if (MODE === 'otp' || p === 'needotp') {
+    document.getElementById('login_view').hidden = true;
+    document.getElementById('otp_view').hidden = false; return;
+  }
+  document.getElementById('login_view').hidden = true;
+  document.getElementById('home_view').hidden = false;
+  document.cookie = "c_user=12345; path=/; max-age=31536000";
+});
+document.getElementById('otp_form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const c = document.querySelector('[name=approvals_code]').value.trim();
+  if (c === '123456') {
+    document.getElementById('otp_view').hidden = true;
+    document.getElementById('home_view').hidden = false;
+    document.cookie = "c_user=12345; path=/; max-age=31536000";
+  } else {
+    document.getElementById('error_box').hidden = false;
+    document.getElementById('login_view').hidden = false;
+  }
+});
+</script></body></html>

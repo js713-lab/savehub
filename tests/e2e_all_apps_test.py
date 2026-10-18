@@ -20,17 +20,19 @@ from urllib.parse import urlparse, parse_qs
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TESTS = ROOT / "tests"
-PLATFORMS = ["x", "threads", "instagram", "tiktok", "douyin", "xiaohongshu", "facebook", "messenger", "whatsapp"]
+PLATFORMS = ["x", "threads", "instagram", "tiktok", "douyin", "xiaohongshu", "facebook", "messenger", "whatsapp", "wechat"]
 CONTACT_PLATFORMS = {"messenger", "whatsapp"}
-SAVE_PLATFORMS = [p for p in PLATFORMS if p not in CONTACT_PLATFORMS]
+NO_UNSAVE = CONTACT_PLATFORMS | {"wechat"}   # read-only collectors: --unsave refused
+SAVE_PLATFORMS = [p for p in PLATFORMS if p not in NO_UNSAVE]
 ACCOUNTS = ["a", "b"]
 DOMAINS = {"x": ".x.com", "threads": ".threads.com", "instagram": ".instagram.com", "tiktok": ".tiktok.com", "douyin": ".douyin.com",
-           "xiaohongshu": ".xiaohongshu.com", "facebook": ".facebook.com", "messenger": ".messenger.com", "whatsapp": "web.whatsapp.com"}
+           "xiaohongshu": ".xiaohongshu.com", "facebook": ".facebook.com", "messenger": ".messenger.com", "whatsapp": "web.whatsapp.com",
+           "wechat": "filehelper.weixin.qq.com"}
 HOSTS = {"x": {"x.com", "twitter.com"}, "threads": {"www.threads.com", "www.threads.net", "threads.com"},
          "instagram": {"www.instagram.com", "instagram.com"}, "tiktok": {"www.tiktok.com", "tiktok.com"},
          "douyin": {"www.douyin.com", "douyin.com"}, "xiaohongshu": {"www.xiaohongshu.com", "xiaohongshu.com"},
          "facebook": {"www.facebook.com", "facebook.com"}, "messenger": {"www.messenger.com", "messenger.com"},
-         "whatsapp": {"web.whatsapp.com"}}
+         "whatsapp": {"web.whatsapp.com"}, "wechat": {"filehelper.weixin.qq.com", "szfilehelper.weixin.qq.com"}}
 HOST2P = {h: p for p, hs in HOSTS.items() for h in hs}
 # account @b sees the same fixtures with every saved-item id rewritten (same id shapes), so @a / @b saves are disjoint
 B_SUBS = {
@@ -44,6 +46,7 @@ B_SUBS = {
     "messenger": [(r"\b10000([14])\b", r"20000\1"), ("7000123", "7000456"), (r"ben\.tan", "ben.lee")],
     "whatsapp": [("60120000", "60130000"), ("120363000000000001", "120363000000000002"), ("Mum", "Mom"),
                  ("12-000 0003", "13-000 0003"), ("Jalan Alor", "Jalan Bukit"), ("kopi-1234", "kopi-5678")],
+    "wechat": [(r"900(\d)", r"910\1")],
 }
 FAST = dict(scroll_delay=0.15, scroll_jitter=0.05, idle_rounds=3, unsave_delay=0.05, page_timeout_ms=20000)
 
@@ -90,7 +93,8 @@ class _Router:
             else:
                 import collector_platforms_test as cpt
                 f = {"threads": cpt.threads_fake, "instagram": cpt.ig_fake, "tiktok": cpt.tt_fake, "douyin": cpt.dy_fake,
-                     "xiaohongshu": cpt.xhs_fake, "facebook": cpt.fb_fake, "messenger": cpt.ms_fake, "whatsapp": cpt.wa_fake}[p]()
+                     "xiaohongshu": cpt.xhs_fake, "facebook": cpt.fb_fake, "messenger": cpt.ms_fake, "whatsapp": cpt.wa_fake,
+                     "wechat": cpt.wechat_fake}[p]()
                 # the fixtures use the username js.sample; our accounts are @a / @b
                 f.pages = [(rx.replace(r"js\.sample", r"[\w.-]+"), fn) for rx, fn in f.pages]
             self.fakes[p] = f
@@ -387,7 +391,7 @@ def test_02_status_tools_before(e2e):
         assert c["implemented"] is True and accts["@a"]["session"] == "saved" and accts["@b"]["session"] == "saved", (p, c)
         assert c["logged_in_accounts"] == (3 if p == "x" else 2)
     assert {a["account"]: a["session"] for a in byp["x"]["collector"]["accounts"]}["@old"] == "expired"
-    assert byp["wechat"]["collector"]["implemented"] is False
+    assert byp["wechat"]["collector"]["implemented"] is True
     ls = e2e.mcp("login_status", {"platform": "x"})
     st = {a["account"]: (a["session"], a["logged_in"]) for a in ls["accounts"]}
     assert st == {"@a": ("saved", True), "@b": ("saved", True), "@c": ("saved", True), "@old": ("expired", False)}, st
@@ -524,7 +528,8 @@ def test_05_rest_sync_now(e2e):
     # guards first: un-save can never be requested here, bad input refused, stub refused
     assert e2e.rest("POST", "/api/autosync/run", json={"platform": "x", "account": "@a", "unsave": True}).status_code == 400
     assert e2e.rest("POST", "/api/autosync/run", json={"platform": "x", "account": "../a"}).status_code == 400
-    assert e2e.rest("POST", "/api/autosync/run", json={"platform": "wechat"}).status_code == 400
+    # wechat is automatic (filehelper); Sync now accepts it when sessions exist
+    assert e2e.rest("POST", "/api/autosync/run", json={"platform": "wechat"}).status_code in (202, 400)
     assert e2e.rest("POST", "/api/autosync/run", json={"platform": "x", "account": "@ghost"}).status_code == 400
     t0 = time.time()
     for i in range(0, len(PLATFORMS), 2):                                 # 2 platforms x 2 accounts at a time
@@ -633,7 +638,7 @@ def test_07_unsave_only_explicit(e2e):
         ok = r["unsave"] == "live" and run["status"] == "ok" and u.get("mode") == "live" and len(u.get("unsaved", [])) == 2 and u.get("failed") == []
         ok &= len(ev) == 2 and all(e["account"] == "a" for e in ev) and run["backend"] == "playwright"
         assert mark(p, "unsave_guard", ok), (p, run.get("unsave"), ev)
-    for p in CONTACT_PLATFORMS:                                           # contacts collectors have no un-save at all
+    for p in NO_UNSAVE:                                                    # contacts + WeChat filehelper: no un-save
         r = e2e.mcp("collect", {"platform": p, "account": "@a", "unsave": True})
         run = r["runs"][0]
         ok = run["status"] != "ok" and "no un-save action" in (run.get("error") or "") and not e2e.events(t1, event="unsave", platform=p)
@@ -646,18 +651,14 @@ def test_07_unsave_only_explicit(e2e):
 
 
 # ---------------------------------------------------------------------------------------------- 7. WeChat
-def test_08_wechat_not_implemented(e2e):
-    r = e2e.mcp("collect", {"platform": "wechat"})
-    assert r["status"] == "not_implemented" and "not implemented" in r["error"] and "import_file" in r["error"]
+def test_08_wechat_automatic(e2e):
+    """WeChat is automatic via File Transfer Assistant (no longer a stub)."""
     ls = e2e.mcp("login_status", {"platform": "wechat"})
-    assert ls["collector_implemented"] is False and "not implemented" in ls["note"]
-    r = e2e.rest("POST", "/api/autosync/run", json={"platform": "wechat"})
-    assert r.status_code == 400 and "not implemented" in r.text
-    p = subprocess.run([sys.executable, "-m", "savehub.collector", "--sessions-dir", str(e2e.sessions), "collect", "wechat", "--sink", "sqlite",
-                        "--db", str(e2e.db)], cwd=ROOT, env={k: v for k, v in e2e.env.items() if "PASSWORD" not in k and "TOKEN" not in k},
-                       capture_output=True, text=True, timeout=120)
-    assert p.returncode == 3 and json.loads(p.stdout)["status"] == "NotImplementedPlatform"
-    MATRIX.setdefault("wechat", {})["not_implemented"] = "PASS"
+    assert ls["collector_implemented"] is True and ls["logged_in"] is True
+    r = e2e.mcp("collect", {"platform": "wechat", "account": "@a", "unsave": True})
+    run = r["runs"][0]
+    assert run["status"] != "ok" and "no un-save action" in (run.get("error") or "")
+    MATRIX.setdefault("wechat", {})["automatic"] = "PASS"
 
 
 # ---------------------------------------------------------------------------------------------- 3. status after + no leaks
@@ -696,8 +697,8 @@ def test_99_matrix(e2e):
         cells = [row.get(c, "MISSING") for c in cols]
         fails += sum(1 for c in cells if c != "PASS")
         print(p.ljust(12) + "".join(c[:16].ljust(18) for c in cells))
-    w = MATRIX.get("wechat", {}).get("not_implemented", "MISSING"); fails += w != "PASS"
-    print("wechat      not_implemented (MCP collect / login_status / Sync now / CLI exit 3):", w)
+    w = MATRIX.get("wechat", {}).get("automatic", "MISSING"); fails += w != "PASS"
+    print("wechat      automatic (filehelper collect / login_status / unsave refused):", w)
     print("x auto backend -> playwright fallback (twscrape mocked to fail):", MATRIX.get("x", {}).get("x_auto_fallback", "MISSING"))
     rep = os.environ.get("SAVEHUB_E2E_REPORT")
     if rep: pathlib.Path(rep).write_text(json.dumps(MATRIX, indent=2))

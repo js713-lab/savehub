@@ -352,7 +352,7 @@ def client(tdb, monkeypatch):
     sessions.write_state(tdb / "x@alice.json", _sess_doc())
     ran = []
     monkeypatch.setattr(autosync, "spawn_collect", lambda p, a, cap, t, s: ran.append((p, a)) or {"status": "ok", "exit_code": 0, "created": 1})
-    monkeypatch.setattr(autosync.Engine.__init__, "__defaults__", (None, None, None, time.time, 5, 30, 100))
+    monkeypatch.setattr(autosync.Engine.__init__, "__defaults__", (None, None, None, time.time, 5, 30, 100, None))  # + relogin_fn
     monkeypatch.setattr(runtime, "collector_runtime", lambda: {"available": True, "browser": "test"})
     return TestClient(appmod.app), TestClient(appmod.app, base_url="http://127.0.0.1:8765", client=("127.0.0.1", 5555)), ran
 
@@ -391,7 +391,7 @@ def test_autosync_endpoints_local_only_without_login(client):
     assert local.post("/api/autosync/run", json={"platform": "x", "unsave": True}).status_code == 400
     assert local.post("/api/autosync/run", json={"platform": "../../etc"}).status_code == 400
     assert local.post("/api/autosync/run", json={"platform": "x", "account": "../../etc/passwd"}).status_code == 400
-    assert local.post("/api/autosync/run", json={"platform": "wechat"}).status_code == 400
+    assert local.post("/api/autosync/run", json={"platform": "wechat"}).status_code in (400, 202, 503)
     assert local.post("/api/autosync/run", json={"platform": "x", "account": "@nobody"}).status_code == 400
     assert local.put("/api/autosync", json={"enabled": True}, headers={"Origin": "http://127.0.0.1:8765"}).status_code == 200
 

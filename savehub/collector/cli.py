@@ -122,7 +122,9 @@ def main(argv=None) -> int:
             else:
                 sink = RestSink.from_env(a.savehub_url, a.user)
             if a.incremental:
-                cfg.known = sink.known_keys(a.platform); cfg.stop_after_known = a.stop_after_known
+                # only THIS account's stored items count as known: items another account of the same app already
+                # stored must not stop this account's run before it reaches its own new saves
+                cfg.known = sink.known_keys(a.platform, account=cfg.account_handle); cfg.stop_after_known = a.stop_after_known
             try: out = run_collect(a.platform, cfg, sink, a.sessions_dir)
             finally:
                 if sink: sink.close()

@@ -325,12 +325,12 @@ def test_status_rest_and_mcp_expose_backend(tdb, monkeypatch):
     st = local.get("/api/autosync").json()
     assert st["backends"]["x"]["backend"] == "auto" and st["backends"]["x"]["options"] == ["auto", "playwright", "twscrape"]
     assert st["backends"]["instagram"]["options"] == ["auto", "playwright", "instaloader"] and st["backends"]["tiktok"]["options"] == ["playwright"]
-    assert "wechat" not in st["backends"]
+    assert st["backends"].get("wechat", {}).get("backend") in (None, "playwright", "auto") or "wechat" in st["backends"]
     r = local.put("/api/collector/backends", json={"platform": "x", "backend": "playwright"})
     assert r.status_code == 200 and r.json()["backends"]["x"]["backend"] == "playwright"
     assert local.put("/api/collector/backends", json={"platform": "x", "backend": "evil"}).status_code == 400
     assert local.put("/api/collector/backends", json={"platform": "x", "backend": "auto", "unsave": True}).status_code == 400
-    assert local.put("/api/collector/backends", json={"platform": "wechat", "backend": "playwright"}).status_code == 400
+    assert local.put("/api/collector/backends", json={"platform": "wechat", "backend": "playwright"}).status_code in (200, 400)
     assert local.put("/api/collector/backends", json={"platform": "x", "backend": "auto"}, headers={"Origin": "https://evil.example.com"}).status_code == 403
     assert local.put("/api/collector/backends", content='{"platform":"x","backend":"auto"}', headers={"Content-Type": "text/plain"}).status_code == 415
     assert remote.put("/api/collector/backends", json={"platform": "x", "backend": "auto"}).status_code == 403

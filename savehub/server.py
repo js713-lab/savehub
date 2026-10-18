@@ -54,7 +54,9 @@ async def app(scope, receive, send):
     (optionally behind HTTP Basic auth when SAVEHUB_DASHBOARD_PASSWORD is set; /healthz stays open)."""
     if scope["type"] in ("http", "websocket"):
         path = scope.get("path", "")
-        if auth.login_configured() and path != "/healthz" and not (path == "/mcp" or path.startswith("/mcp/")) and not _basic_ok(scope):
+        # /connect/<token> and its POST /api/connect/<token> are gated by the single-use token itself (no dashboard login)
+        open_connect = path.startswith("/connect/") or path.startswith("/api/connect/")
+        if auth.login_configured() and path != "/healthz" and not open_connect and not (path == "/mcp" or path.startswith("/mcp/")) and not _basic_ok(scope):
             if scope["type"] == "websocket":   # an HTTP response is not valid on a websocket scope: refuse the handshake
                 await send({"type": "websocket.close", "code": 1008}); return
             await send({"type": "http.response.start", "status": 401, "headers": webapp.login_required_headers(scope)})

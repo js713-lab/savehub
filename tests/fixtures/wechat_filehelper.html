@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><title>文件传输助手网页版</title>
+<style>.msg-list{height:300px;overflow:auto}</style></head>
+<body><div class="chat-panel"><div class="msg-list" id="list"></div><textarea id="chatInput"></textarea></div>
+<script>
+// like the real web app: webwxinit, then webwxsync (AddMsgList); messages rendered into the list (oldest first)
+const BR = {BaseRequest: {Uin: 1, Sid: "s", Skey: "k", DeviceID: "e1"}};
+const render = (msgs) => { for (const m of msgs) { if (m.MsgType === 51) continue;
+  const d = document.createElement('div'); d.setAttribute('data-msgid', m.MsgId); d.setAttribute('data-time', m.CreateTime);
+  d.className = 'msg'; const t = document.createElement('div'); t.className = 'msg-text';
+  t.textContent = m.MsgType === 49 ? (m.FileName || '') : (m.Content || ''); d.appendChild(t);
+  if (m.Url) { const a = document.createElement('a'); a.href = m.Url; a.textContent = m.FileName; d.appendChild(a); }
+  document.getElementById('list').appendChild(d); } };
+fetch('/cgi-bin/mmwebwx-bin/webwxinit?r=1', {method: 'POST', body: JSON.stringify(BR)}).then(r => r.json()).then(j => {
+  return fetch('/cgi-bin/mmwebwx-bin/webwxsync?sid=s&skey=k', {method: 'POST', body: JSON.stringify({...BR, SyncKey: j.SyncKey})});
+}).then(r => r.json()).then(j => render(j.AddMsgList || []));
+</script></body></html>

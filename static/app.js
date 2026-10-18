@@ -1201,7 +1201,7 @@ async function viewConnect(params) {
     : `<div class="row"><button class="btn small ${connected ? 'ghost' : ''}" onclick="importModal('${p.id}')">Import…</button></div>`}
   </div>`; };
   $('#view').innerHTML = `<div class="pagehead"><div><h2>Connect apps</h2><p class="muted small">Choose which apps SaveHub collects from.</p></div></div>
-  <p class="muted small intro">Honest status: only <span class="method live_api">LIVE API</span> X has an official bookmarks API. Every other app has <b>no public API for your saved/favourite items</b>, so SaveHub imports their <b>official data-export files</b> or links you paste. On the box, the browser collector + auto-sync (see <a href="#/accounts">Accounts</a>) also picks up new saves from logged-in accounts.</p>
+  <p class="muted small intro">Most apps connect automatically: add the login on <a href="#/accounts">Accounts</a> (password goes into the encrypted vault; SaveHub signs in and auto-syncs). X also has an official bookmarks API. Importing a data-export file is optional.</p>
   <div class="grid cgrid2">${PLATFORMS.map(card).join('')}</div>
   <div class="panel" style="margin-top:16px"><h4>Quick paste links (any app — 小红书 / 抖音 / 微信 share text works)</h4>
     <textarea id="paste" placeholder="Paste one or more links or share texts here…" aria-label="Links to import"></textarea>

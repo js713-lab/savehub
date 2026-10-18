@@ -13,6 +13,20 @@ from .base import CollectedItem, CollectorError, EXIT_PUSH_FAILED
 from .logutil import ev
 
 
+def _akey(account) -> str:
+    """'' for the legacy default session, else the normalised handle."""
+    k = str(account or "").strip().lstrip("@").strip().lower()
+    return "" if k in ("", "default") else k
+
+
+def _keys(rows) -> set:
+    out = set()
+    for r in rows:
+        if r["url"]: out.add(r["url"])
+        if r["external_id"]: out.add("id:" + str(r["external_id"]))
+    return out
+
+
 class PushError(CollectorError):
     exit_code = EXIT_PUSH_FAILED
 
@@ -80,10 +94,11 @@ class RestSink:
         return r.json()
 
     def resolve_account(self, platform: str, handle: str) -> Optional[int]:
-        h = handle.lstrip("@").lower()
+        h = _akey(handle)
+        if not h: return None
         r = self._req("GET", "/api/accounts", params={"platform": platform, "q": h})
         for a in r.json().get("accounts", []):
-            if (a.get("handle") or "").lstrip("@").lower() == h: return a["id"]
+            if _akey(a.get("handle")) == h: return a["id"]
         return None
 
     def ensure_account(self, platform: str, handle: str) -> Optional[int]:
@@ -94,15 +109,21 @@ class RestSink:
         r = self._req("POST", "/api/accounts", json={"platform": platform, "handle": h, "display_name": h, "connected_via": "collector"})
         return r.json().get("id") if r.status_code == 200 else None
 
-    def known_keys(self, platform: str, limit: int = 500) -> set:
-        """Incremental mode: urls (+ "id:<external_id>") of the newest stored items of this platform."""
-        r = self._req("GET", "/api/items", params={"platform": platform, "sort": "created_at", "order": "desc", "limit": int(limit)})
+    def known_keys(self, platform: str, limit: int = 500, account: str = "") -> set:
+        """Incremental mode: urls (+ "id:<external_id>") of the newest stored items of this platform. With `account`
+        (a handle) only that account's items count (linked account row or source tag), so items another account of the
+        same app already stored never stop this account's incremental run early."""
+        h = _akey(account)
+        params = {"platform": platform, "sort": "created_at", "order": "desc", "limit": int(limit)}
+        aid = self.resolve_account(platform, h) if h else None
+        if aid is not None: params["account_id"] = aid
+        r = self._req("GET", "/api/items", params=params)
         if r.status_code != 200: raise PushError(f"could not read stored items for incremental sync: HTTP {r.status_code}")
-        out = set()
-        for it in r.json().get("items", []):
-            if it.get("url"): out.add(it["url"])
-            if it.get("external_id"): out.add("id:" + str(it["external_id"]))
-        return out
+        items = r.json().get("items", [])
+        if h:
+            src = f"collector:{platform}:{h}"
+            items = [it for it in items if (aid is not None and it.get("account_id") == aid) or it.get("source") == src]
+        return _keys(items)
 
     def push(self, item: CollectedItem, account_id=None, collected_at="") -> PushResult:
         res = PushResult(item)
@@ -139,10 +160,7 @@ class SqliteSink:
     def check(self): return {"ok": True, "stats": self.db.stats()}
 
     def resolve_account(self, platform, handle):
-        h = handle.lstrip("@").lower()
-        for a in self.db.list_accounts(h, platform)["accounts"]:
-            if (a.get("handle") or "").lstrip("@").lower() == h: return a["id"]
-        return None
+        return self.db.find_account(platform, handle)
 
     def ensure_account(self, platform, handle):
         aid = self.resolve_account(platform, handle)
@@ -150,12 +168,22 @@ class SqliteSink:
         h = "@" + handle.lstrip("@")
         return self.db.add_account({"platform": platform, "handle": h, "display_name": h, "connected_via": "collector"})[0]
 
-    def known_keys(self, platform: str, limit: int = 5000) -> set:
-        out = set()
-        for r in self.db.conn().execute("SELECT url, external_id FROM items WHERE platform=? ORDER BY id DESC LIMIT ?", (platform, int(limit))):
-            if r["url"]: out.add(r["url"])
-            if r["external_id"]: out.add("id:" + str(r["external_id"]))
-        return out
+    def known_keys(self, platform: str, limit: int = 5000, account: str = "") -> set:
+        """See RestSink.known_keys: per account when `account` is given, else every stored item of the platform."""
+        h = _akey(account)
+        if h:
+            aid = self.resolve_account(platform, h)
+            rows = self.db.conn().execute("SELECT url, external_id FROM items WHERE platform=? AND (account_id=? OR source=?) ORDER BY id DESC LIMIT ?",
+                                          (platform, aid if aid is not None else -1, f"collector:{platform}:{h}", int(limit)))
+        else:
+            rows = self.db.conn().execute("SELECT url, external_id FROM items WHERE platform=? ORDER BY id DESC LIMIT ?", (platform, int(limit)))
+        return _keys(rows)
+
+    def record_unsave(self, item_id, status: str, error: str = "") -> None:
+        """Remember the outcome of an un-save attempt on the stored item (raw.unsave); the item itself is never removed."""
+        from datetime import datetime, timezone
+        self.db.merge_item_raw(item_id, {"unsave": {"status": status, "at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                                                    **({"error": error[:300]} if error else {})}})
 
     def push(self, item, account_id=None, collected_at="") -> PushResult:
         res = PushResult(item)

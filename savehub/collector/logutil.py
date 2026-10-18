@@ -16,11 +16,21 @@ _PATTERNS = [
     (re.compile(r'(?i)("value"\s*:\s*")[^"]{4,}(")'), r"\1" + REDACTED + r"\2"),
     (re.compile(r"(?i)\b(auth_token|sessionid|sid|ds_user_id|c_user|xs|ct0|web_session|sessionid_ss|a1)=([^;\s&]{6,})"), r"\1=" + REDACTED),
     (re.compile(r"https?://[^/\s:@]+:[^/\s@]+@"), "https://" + REDACTED + "@"),
+    (re.compile(r"(/connect/)[A-Za-z0-9_-]{16,}"), r"\1" + REDACTED),          # single-use MCP connect links
 ]
+_LIVE_SECRETS: set = set()                     # passwords of login jobs in flight (never logged; scrubbed if they leak)
+
+
+def register_secret(v: str):
+    if v and len(v) >= 4: _LIVE_SECRETS.add(v)
+
+
+def forget_secret(v: str):
+    _LIVE_SECRETS.discard(v)
 
 
 def _secret_values():
-    vals = [v for k, v in os.environ.items() if _SECRET_NAME.search(k) and v and len(v) >= 8]
+    vals = [v for k, v in os.environ.items() if _SECRET_NAME.search(k) and v and len(v) >= 8] + list(_LIVE_SECRETS)
     try:
         from savehub import vault
         if vault._runtime_key: vals.append(vault._runtime_key)

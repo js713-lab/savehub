@@ -7,7 +7,7 @@ Config/auth: SAVEHUB_ENABLED_PLATFORMS=x,instagram,xiaohongshu (limits what tool
 import argparse, asyncio, base64, hmac, importlib.util, json, os, signal, stat, sys, time
 from pathlib import Path
 from typing import Optional
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from . import db, importers, summary, sync, tagger
 
 from mcp.server.transport_security import TransportSecuritySettings
@@ -208,12 +208,14 @@ def _sync_state(what: str, platform: str, account: str, **kw) -> None:
         print(f"[savehub] sync-state update failed: {type(e).__name__}", file=sys.stderr)
 
 @mcp.tool()
-async def collect(platform: str, account: Optional[str] = None, max_items: Optional[int] = None, unsave: bool = False) -> dict:
+async def collect(platform: str, account: Optional[str] = None, max_items: Optional[int] = None, unsave: Optional[bool] = None) -> dict:
     """Run the collector for a platform and store new saves in SaveHub, tagged with the account they came from
     (linked account_id + source=collector:<platform>:<handle>). account = handle like '@me'; omit to collect every logged-in account.
-    max_items caps items per account (default 200; icloud: per kind, files and contacts). unsave=false (default) never touches the app;
-    ONLY unsave=true un-saves items on the real app, and only after each one is confirmed stored (refused for read-only collectors
-    such as icloud, messenger, whatsapp). Needs a saved session (log in on the box first) and a browser (icloud: no browser, pyicloud)."""
+    max_items caps items per account (default 200; icloud: per kind, files and contacts). Un-save is OFF by default:
+    unsave=true un-saves on the real app for this call; unsave=false never does; omitted = the per-account dashboard setting
+    (Accounts page toggle, default off). Items are un-saved only after each one is confirmed stored, never by auto-sync, and it
+    is refused for read-only collectors (icloud, messenger, whatsapp, wechat). Needs a saved session (sign in on the dashboard
+    or on the box first) and a browser (icloud: no browser, pyicloud)."""
     base, sessions = _col()
     if platform not in base.REGISTRY: return {"error": f"unknown platform '{platform}'; one of {sorted(base.REGISTRY)}"}
     if platform not in enabled(): return {"error": f"platform '{platform}' is not enabled in this config"}
@@ -237,7 +239,8 @@ async def collect(platform: str, account: Optional[str] = None, max_items: Optio
     if not rt["available"]:
         return {"status": "browser_unavailable" if getattr(base.REGISTRY[platform], "uses_browser", True) else "collector_unavailable",
                 "platform": platform, "error": "Cannot collect on this server: " + rt["reason"]}
-    runs, unsave = [], unsave is True
+    runs, explicit = [], unsave
+    unsave = unsave is True
     rt_mod = _rt()
     if unsave and not base.REGISTRY[platform].supports_unsave:   # usage error, not an account problem: no run, no sync-state change
         err = f"'{platform}' has no un-save action (its collector gathers {base.REGISTRY[platform].kind}); call collect without unsave"
@@ -251,9 +254,13 @@ async def collect(platform: str, account: Optional[str] = None, max_items: Optio
         if busy:
             runs.append({"account": a["account"], "status": "busy", "error": "a collection for this account is already running"}); continue
         started = time.time()
+        # explicit unsave=true/false wins; omitted -> the per-account (else per-platform) dashboard toggle, default OFF
+        acct_unsave = (explicit is True) if explicit is not None else (base.REGISTRY[platform].supports_unsave
+                                                                        and db.unsave_enabled(platform, "" if key == sessions.DEFAULT_ACCOUNT else key))
+        if acct_unsave: unsave = True
         _sync_state("start", platform, key)
         res = {"status": "error", "error": "collection failed to start"}
-        try: res = await _run_collect_proc(_collect_cmd(platform, key, max_items, unsave), COLLECT_TIMEOUT_S)
+        try: res = await _run_collect_proc(_collect_cmd(platform, key, max_items, acct_unsave), COLLECT_TIMEOUT_S)
         finally:
             with rt_mod.RUNNING_LOCK: rt_mod.RUNNING.discard(lock)
             _sync_state("record", platform, key, res=res, started=started)
@@ -356,9 +363,19 @@ def search_contacts(query: str = "", account_id: Optional[int] = None, limit: in
     return db.search_contacts(query, account_id, None, "name", "asc", limit)
 
 @mcp.tool()
-def sync_now(target: str = "all") -> dict:
-    """Run optional sync (target: all | notion | drive). Only runs targets enabled in Settings."""
-    return sync.sync_now(target)
+def sync_now(target: str = "all", platform: Optional[str] = None, account: Optional[str] = None) -> dict:
+    """Run sync now. target: all | collector | notion | drive. 'collector' (also part of 'all') pulls new saved items from every
+    signed-in account (or one platform / account) with an incremental collect in the background - it NEVER un-saves.
+    Notion / Drive only run when enabled in Settings. Poll sync_status / connection_status for progress."""
+    if target not in ("all", "collector", "notion", "drive"): return {"error": "target must be all | collector | notion | drive"}
+    res = sync.sync_now(target) if target != "collector" else {}
+    if target in ("all", "collector"):
+        a = _autosync()
+        try: res["collector"] = a.request_sync(platform or None, account or None)
+        except ValueError as e: res["collector"] = {"error": str(e)}
+        except a.Unavailable as e: res["collector"] = {"skipped": f"collector unavailable on this server: {e}"}
+        except a.RateLimited as e: res["collector"] = {"skipped": str(e), "retry_after": e.retry_after}
+    return res
 
 @mcp.tool()
 def list_accounts(platform: str = "", status: str = "", sort: str = "platform", limit: int = 100) -> dict:
@@ -407,6 +424,99 @@ def set_autosync(enabled: bool, interval_minutes: Optional[int] = None) -> dict:
     elif cfg["enabled"] and not st["loop"]["running"]:
         r["note"] = "No auto-sync loop is running: start `python -m savehub.collector autosync` on the box, or run the server with SAVEHUB_AUTOSYNC=1."
     return r
+
+# ---------------- connect apps (MCP chooses the apps; credentials go ONLY through a single-use dashboard link) ----------------
+def _public_base() -> str:
+    b = os.environ.get("SAVEHUB_PUBLIC_URL") or (f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}" if os.environ.get("RENDER_EXTERNAL_HOSTNAME") else "")
+    if not b: b = f"http://127.0.0.1:{os.environ.get('SAVEHUB_PORT') or os.environ.get('PORT') or 8765}"
+    return b.rstrip("/")
+
+def _connectable() -> list:
+    base, _ = _col()
+    from .collector import login_flows
+    return [{"id": k, "name": db.PLATFORMS[k]["name"], "login": "qr" if not login_flows.supports_password_login(k) else
+             ("apple_id" if k == "icloud" else "password")} for k in db.PLATFORMS if k in base.REGISTRY and base.REGISTRY[k].implemented]
+
+def _client_elicitation(ctx):
+    """The client's declared elicitation capability (None = not supported, so never send it a request)."""
+    try: return ctx.request_context.session.client_params.capabilities.elicitation
+    except Exception: return None
+
+def _elicit_schema(ids):
+    from pydantic import create_model, Field
+    fields = {}
+    for p in ids:
+        fields[f"{p}"] = (bool, Field(default=False, description=f"Connect {db.PLATFORMS[p]['name']}"))
+        fields[f"{p}_handle"] = (str, Field(default="", description=f"{db.PLATFORMS[p]['name']}: your handle / username (no password)"))
+    return create_model("ConnectApps", **fields)
+
+@mcp.tool()
+async def connect_apps(platforms: Optional[list[str]] = None, handles: Optional[dict[str, str]] = None, ctx: Context = None) -> dict:
+    """Connect apps for automatic syncing. Without platforms: asks the user which apps (MCP elicitation where the client supports
+    it, else returns the list to ask). With platforms (+ optional handles {platform: '@handle'}): creates pending accounts and
+    returns a single-use secure link (15 min) to SaveHub's own page, where the user types username + password per app. NEVER
+    send or ask for a password here: passwords go only into that page -> encrypted vault -> automatic sign-in -> first sync.
+    Then poll connection_status()."""
+    from .collector import sessions as _s
+    from . import connect as cl
+    apps = _connectable(); ids = [a["id"] for a in apps]
+    handles = dict(handles or {})
+    cap = _client_elicitation(ctx) if ctx is not None else None
+    if not platforms and cap is not None:
+        try:
+            r = await ctx.elicit("Which apps should SaveHub connect? (no passwords here: you will get a secure link)", _elicit_schema(ids))
+            if r.action == "accept" and r.data is not None:
+                d = r.data.model_dump()
+                platforms = [p for p in ids if d.get(p)]
+                handles.update({p: d.get(f"{p}_handle") or "" for p in platforms if d.get(f"{p}_handle")})
+        except Exception:
+            platforms = platforms or None                      # client has no elicitation: fall back to returning the list
+    if not platforms:
+        return {"step": "choose_apps", "apps": apps, "note": "Ask the user which apps to connect (and their handle per app, never a password), "
+                "then call connect_apps(platforms=[...], handles={...})."}
+    bad = [p for p in platforms if p not in ids]
+    if bad: return {"error": f"cannot connect: {bad}; one of {ids}"}
+    if any(isinstance(v, str) and len(v) > 64 for v in handles.values()): return {"error": "handles must be short usernames"}
+    targets = []
+    for p in dict.fromkeys(platforms):
+        try: k = _s.account_key(handles.get(p) or "me")
+        except ValueError as e: return {"error": str(e)}
+        if k == _s.DEFAULT_ACCOUNT: k = "me"
+        aid, _ = db.add_account({"platform": p, "handle": "@" + k, "display_name": "@" + k, "connected_via": "autologin", "status": "pending"})
+        targets.append({"platform": p, "account": "@" + k, "account_id": aid})
+    link = cl.create([{"platform": t["platform"], "account": t["account"]} for t in targets])
+    url = _public_base() + link["path"]
+    opened = False
+    if cap is not None and getattr(cap, "url", None) is not None:
+        try:
+            import secrets as _sec
+            r = await ctx.elicit_url("Open SaveHub's secure page to enter your logins (they never pass through this chat).", url, _sec.token_hex(8))
+            opened = getattr(r, "action", "") == "accept"
+        except Exception:
+            opened = False
+    return {"step": "open_link", "url": url, "expires_in_s": link["expires_in_s"], "single_use": True, "opened_by_client": opened,
+            "accounts": targets, "note": "Give the user this link (or it was opened for them). Credentials are entered ONLY on that page "
+            "(never through MCP); SaveHub then signs in automatically and starts the first sync. Poll connection_status()."}
+
+@mcp.tool()
+def connection_status(platform: Optional[str] = None) -> dict:
+    """Progress of connected accounts: Signing in… | Connected | Syncing | Needs code (with code_url to enter it on the dashboard) |
+    Scan QR code | Wrong password | Error, plus last_sync and items collected. Never returns passwords, cookies or tokens."""
+    _col()
+    from .collector import autologin, sessions as _s
+    out, seen = [], set()
+    for a in db.list_accounts("", platform or None, None, "platform", "asc", 5000)["accounts"]:
+        try: k = _s.account_key(db.norm_handle(a.get("handle")))
+        except ValueError: continue
+        if k == _s.DEFAULT_ACCOUNT or a["platform"] == "web": continue
+        if a.get("connected_via") not in ("autologin", "collector") and not _s.session_path(a["platform"], None, k).exists(): continue
+        seen.add((a["platform"], k))
+        st = autologin.account_status(a["platform"], k)
+        st["items"] = db.list_items("", [a["platform"]], None, a["id"], limit=1)["total"]
+        if st.get("code_url"): st["code_url"] = _public_base() + st["code_url"]
+        st["done"] = st["status"] in ("connected", "done") and bool(st.get("last_sync") or st["items"])
+        out.append(st)
+    return {"accounts": out, "all_done": bool(out) and all(x["done"] for x in out)}
 
 class BearerAuth:
     """Every request to the MCP endpoint (all tools, incl. collect / set_autosync / sync_status) needs the bearer token

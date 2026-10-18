@@ -108,15 +108,11 @@ def test_registry_and_stubs():
     assert set(REGISTRY) == expected
     impl = {p["platform"]: p["implemented"] for p in list_platforms()}
     implemented = {k for k, v in impl.items() if v}
-    assert {"x", "threads", "instagram"} <= implemented and impl["wechat"] is False     # WeChat: no usable web client
+    assert {"x", "threads", "instagram", "wechat"} <= implemented and impl["wechat"] is True
     for name in implemented: assert get_collector(name).notes or name == "x"
-    for name in expected - implemented:
-        c = get_collector(name)
-        for call in (lambda: c.collect(None, RunConfig()), lambda: c.unsave(None, None, RunConfig()), lambda: c.is_login_page(None)):
-            with pytest.raises(NotImplementedPlatform, match=rf"'{name}' collector is not implemented yet.*TODO"): call()
-        assert c.notes and c.saved_url
+    assert expected - implemented == set()                                          # every registered platform is collectable
     with pytest.raises(Exception, match="unknown platform"): get_collector("myspace")
-    with pytest.raises(NotImplementedPlatform): runner.run_collect("wechat", RunConfig())
+    with pytest.raises(NeedLogin): runner.run_collect("wechat", RunConfig())         # implemented, needs a saved session
 
 
 def test_unsave_off_and_dry_run_by_default(tmp_path):
@@ -134,7 +130,7 @@ def test_unsave_off_and_dry_run_by_default(tmp_path):
     r = subprocess.run([sys.executable, "-m", "savehub.collector", "collect", "x", "--no-push", "--unsave"], cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 1 and "cannot be combined" in r.stdout
     r = subprocess.run([sys.executable, "-m", "savehub.collector", "collect", "wechat"], cwd=ROOT, capture_output=True, text=True)
-    assert r.returncode == 3 and json.loads(r.stdout)["status"] == "NotImplementedPlatform"
+    assert r.returncode == 2 and json.loads(r.stdout)["status"] == "need_login"     # WeChat is automatic (filehelper); needs a QR session
 
 
 # ---------------------------------------------------------------- parser
@@ -374,7 +370,9 @@ def test_mcp_tools_signatures_and_no_secrets(mcpmod):
     tools = {t.name: t for t in arun(m.mcp.list_tools())}
     assert list(tools["login_status"].inputSchema["properties"]) == ["platform", "account"]
     assert list(tools["collect"].inputSchema["properties"]) == ["platform", "account", "max_items", "unsave"]
-    assert inspect.signature(m.collect).parameters["unsave"].default is False and tools["collect"].inputSchema["properties"]["unsave"]["default"] is False
+    # unsave defaults to null/None = honour the dashboard per-account setting (itself OFF by default); only true forces live un-save
+    assert inspect.signature(m.collect).parameters["unsave"].default is None
+    assert tools["collect"].inputSchema["properties"]["unsave"].get("default", None) in (None, False)
     for t in tools.values():
         sch = json.dumps(t.inputSchema).lower()
         assert not any(w in sch for w in ("password", "secret", "cookie", "token", "credential")), t.name
@@ -395,13 +393,13 @@ def test_mcp_login_status_and_list_platforms(mcpmod):
     r = m.login_status("x", "@bob"); assert not r["logged_in"] and "--account @bob" in r["fix"]
     r = m.login_status("x", "@nobody"); assert r["accounts"][0]["session"] == "missing" and not r["logged_in"]
     assert "error" in m.login_status("myspace") and "error" in m.login_status("x", "../../etc")
-    r = m.login_status("wechat"); assert r["collector_implemented"] is False and "not implemented" in r["note"]
+    r = m.login_status("wechat"); assert r["collector_implemented"] is True and r["logged_in"] is False
     r = m.login_status("instagram"); assert r["collector_implemented"] is True and r["accounts"][0]["account"] == "@food"
     lp = {p["id"]: p for p in m.list_platforms()["platforms"]}
     assert lp["x"]["collector"]["supported"] and lp["x"]["collector"]["logged_in_accounts"] == 1
     assert {a["account"] for a in lp["x"]["collector"]["accounts"]} == {"@alice", "@bob"}
     assert lp["instagram"]["collector"]["implemented"] is True and lp["instagram"]["collector"]["accounts"][0]["account"] == "@food"
-    assert lp["wechat"]["collector"]["implemented"] is False
+    assert lp["wechat"]["collector"]["implemented"] is True
     assert lp["web"]["collector"]["supported"] is False if "web" in lp else True
     assert "available" in m.list_platforms()["collector_runtime"]
 
@@ -415,7 +413,7 @@ def test_mcp_collect_guards(mcpmod, monkeypatch):
     t = time.time()
     r = arun(m.collect("x")); assert r["status"] == "need_login" and "login x --account @<handle>" in r["error"]
     r = arun(m.collect("x", "@zed")); assert r["status"] == "need_login" and "login x --account @zed" in r["error"]
-    assert arun(m.collect("wechat"))["status"] == "not_implemented"
+    assert arun(m.collect("wechat"))["status"] == "need_login"                       # automatic collector, no session yet
     assert "unknown platform" in arun(m.collect("myspace"))["error"]
     assert "max_items" in arun(m.collect("x", max_items=0))["error"]
     _sess(d, "x@alice.json")

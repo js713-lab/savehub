@@ -168,11 +168,19 @@ def build_cmd(platform: str, account: str, max_items: int, sessions_dir=None, wi
     cmd += ["--sessions-dir", str(sessions.sessions_dir(sessions_dir)), "collect", platform, "--sink", "sqlite", "--db", str(db.DB_PATH),
             "--incremental", "--stop-after-known", str(STOP_AFTER_KNOWN), "--max-items", str(int(max_items))]
     if account != sessions.DEFAULT_ACCOUNT: cmd += ["--account", account]
-    if any("unsave" in c for c in cmd): raise RuntimeError("auto-sync must never un-save")   # invariant (not an assert: survives -O)
+    if "--unsave" in cmd or "--unsave-confirm" in cmd: raise RuntimeError("auto-sync must never un-save")  # invariant (not an assert: survives -O)
     return cmd
 
 
 _CURRENT: dict = {}           # thread id -> Popen (so a stopping loop can kill its child)
+
+
+def _default_relogin(platform, account, sessions_dir=None):
+    """Re-login from the encrypted vault (savehub.collector.autologin) unless the last attempt was a wrong password."""
+    from . import autologin, login_flows
+    if not login_flows.supports_password_login(platform): return None
+    if (autologin.get_job(platform, account).get("status") or "") == "wrong_password": return None
+    return autologin.try_relogin(platform, account, sessions_dir)
 
 
 def spawn_collect(platform: str, account: str, max_items: int, timeout: int, sessions_dir=None) -> dict:
@@ -211,9 +219,11 @@ class Engine:
     """Schedules and runs incremental collects. run_fn/clock are injectable for tests."""
 
     def __init__(self, sessions_dir=None, platforms=None, run_fn: Optional[Callable] = None, clock: Callable = time.time,
-                 timeout: int = DEFAULT_TIMEOUT_S, max_items: int = DEFAULT_MAX_ITEMS, first_max_items: int = FIRST_RUN_MAX_ITEMS):
+                 timeout: int = DEFAULT_TIMEOUT_S, max_items: int = DEFAULT_MAX_ITEMS, first_max_items: int = FIRST_RUN_MAX_ITEMS,
+                 relogin_fn: Optional[Callable] = None):
         self.sessions_dir, self.platforms = sessions_dir, set(platforms or ()) or None
         self.run_fn = run_fn or spawn_collect
+        self.relogin_fn = relogin_fn if relogin_fn is not None else _default_relogin
         self.clock, self.timeout, self.max_items, self.first_max_items = clock, timeout, max_items, first_max_items
 
     def interval(self) -> int:
@@ -250,6 +260,8 @@ class Engine:
         base = {"platform": platform, "account": account}
         if d["status"] == "missing": return {**base, "status": "skipped", "reason": "no session"}
         mt = d.get("mtime") or (path.stat().st_mtime if path.exists() else None)
+        if d["status"] == "expired" and self._relogin(platform, account) == "connected":
+            d = sessions.describe(path); mt = d.get("mtime") or mt               # fresh session from the vault login
         if d["status"] == "expired":
             _update_state(platform, account, status="needs_login", running=0, last_run=now, session_mtime=mt, next_run=None,
                           last_error="session cookies expired: log in again on the box", last_reason=reason)
@@ -263,11 +275,27 @@ class Engine:
         cap = self.first_max_items if first else self.max_items
         _update_state(platform, account, running=1, last_run=now, session_mtime=mt, last_reason=reason)
         ev("autosync.run", platform=platform, account=account, max_items=cap, reason=reason)
-        try:
-            res = self.run_fn(platform, account, cap, self.timeout, self.sessions_dir) or {}
-        except Exception as e:                                          # never let one account kill the loop
-            res = {"status": "error", "error": f"{type(e).__name__}: {e}", "exit_code": None}
+        res = self._call(platform, account, cap)
+        if (res.get("exit_code") == EXIT_NEED_LOGIN or res.get("status") == "need_login") and self._relogin(platform, account) == "connected":
+            res = self._call(platform, account, cap)                     # the app logged us out: re-login from the vault, retry once
         return {**base, **self._record(platform, account, res, now, iv, mt, reason)}
+
+    def _call(self, platform, account, cap) -> dict:
+        try:
+            return self.run_fn(platform, account, cap, self.timeout, self.sessions_dir) or {}
+        except Exception as e:                                          # never let one account kill the loop
+            return {"status": "error", "error": f"{type(e).__name__}: {e}", "exit_code": None}
+
+    def _relogin(self, platform, account):
+        """Expired / rejected session + saved vault login -> automatic re-login (never un-saves). None = no credentials."""
+        if not self.relogin_fn: return None
+        try: st = self.relogin_fn(platform, account, self.sessions_dir)
+        except Exception as e:
+            ev("autosync.relogin_error", logging.WARNING, platform=platform, account=account, error=scrub(str(e))[:200]); return "error"
+        if st: ev("autosync.relogin", platform=platform, account=account, result=st)
+        if st and st != "connected":
+            _update_state(platform, account, last_error=f"automatic re-login: {st.replace('_', ' ')}")
+        return st
 
     def _record(self, platform, account, res, started, iv, mt, reason) -> dict:
         code, status = res.get("exit_code"), res.get("status")

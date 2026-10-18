@@ -7,18 +7,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("SAVEHUB_DB", ROOT / "data" / "savehub.db"))
 
+AUTO = " Add the account on the Accounts page (username + password go into the encrypted vault, SaveHub signs in headless and auto-sync keeps it current; codes / QR are asked for on the card). Importing a data export is optional."
 PLATFORMS = {
-    "x":           {"name": "X (Twitter)", "method": "live_api", "detail": "Official X API v2, OAuth 2.0 PKCE, GET /2/users/:id/bookmarks. Needs your own X developer app Client ID (and an API tier that includes bookmarks)."},
-    "threads":     {"name": "Threads", "method": "import", "detail": "No public saved-posts API. Import Instagram/Threads 'Download your information' (JSON) export."},
-    "instagram":   {"name": "Instagram", "method": "import", "detail": "No public saved-posts API. Import 'Download your information' JSON (your_instagram_activity/saved/saved_posts.json)."},
-    "facebook":    {"name": "Facebook", "method": "import", "detail": "No public Saved API. Import 'Download your information' JSON (saved_items_and_collections)."},
-    "messenger":   {"name": "Messenger", "method": "import", "detail": "No API for personal chats. Import Facebook 'Download your information' messages JSON (links are extracted)."},
-    "whatsapp":    {"name": "WhatsApp", "method": "import", "detail": "No API for personal chats/starred messages. Use 'Export chat' (.txt); links in the chat become items."},
-    "wechat":      {"name": "WeChat 微信", "method": "import", "detail": "No export of Favourites (收藏). Paste share links / article links, or import a CSV/JSON/HTML link list."},
-    "tiktok":      {"name": "TikTok", "method": "import", "detail": "No public favourites API for personal use. Import TikTok data export JSON (Favorite Videos / Like List)."},
-    "douyin":      {"name": "抖音 Douyin", "method": "import", "detail": "No public favourites API. Paste share links (v.douyin.com) or import CSV/JSON/HTML link list."},
-    "xiaohongshu": {"name": "小红书 RED", "method": "import", "detail": "No public API. Paste share text/links (xhslink.com) or import CSV/JSON/HTML link list."},
-    "icloud":      {"name": "iCloud", "method": "collector", "detail": "iCloud Drive files + iCloud Contacts, read-only, via the on-box collector (pyicloud + icloud4u-mcp). Log in once on the box with your Apple ID, password and 2FA code (commands below); the password is never stored, only the encrypted trusted session. Files are indexed with name, path, type, size, modified date and the text of small documents/PDFs; auto-sync picks up new and changed files."},
+    "x":           {"name": "X (Twitter)", "method": "live_api", "detail": "Automatic: on-box collector reads your Bookmarks (or the official X API v2 with your own developer app)." + AUTO},
+    "threads":     {"name": "Threads", "method": "collector", "detail": "Automatic: on-box collector reads threads.com/saved." + AUTO},
+    "instagram":   {"name": "Instagram", "method": "collector", "detail": "Automatic: on-box collector reads Saved (all posts + every collection)." + AUTO},
+    "facebook":    {"name": "Facebook", "method": "collector", "detail": "Automatic: on-box collector reads facebook.com/saved (posts, links, videos)." + AUTO},
+    "messenger":   {"name": "Messenger", "method": "collector", "detail": "Automatic: on-box collector reads your chat list as contacts (same login as Facebook)." + AUTO},
+    "whatsapp":    {"name": "WhatsApp", "method": "collector", "detail": "Automatic: WhatsApp Web contacts, groups and starred messages. Signs in by QR scan only (WhatsApp has no password login): the QR code is shown on the account card, scan it once with your phone; auto-sync does the rest. Chat-export import is optional."},
+    "wechat":      {"name": "WeChat 微信", "method": "collector", "detail": "Automatic: the official web File Transfer Assistant (文件传输助手, filehelper.weixin.qq.com). Scan the QR code on the account card once; every link, article, note and file you send or forward to 文件传输助手 is collected by auto-sync. Favourites 收藏 have no web/API anywhere: forward them to File Transfer. Contacts are not reachable from the web for most accounts. Pasting links is optional."},
+    "tiktok":      {"name": "TikTok", "method": "collector", "detail": "Automatic: on-box collector reads Favorites (collections)." + AUTO},
+    "douyin":      {"name": "抖音 Douyin", "method": "collector", "detail": "Automatic: on-box collector reads 收藏 (password or QR sign-in; a QR code is shown on the card if Douyin asks)." + AUTO},
+    "xiaohongshu": {"name": "小红书 RED", "method": "collector", "detail": "Automatic: on-box collector reads 收藏 notes." + AUTO},
+    "icloud":      {"name": "iCloud", "method": "collector", "detail": "Automatic: iCloud Drive files + iCloud Contacts, read-only (pyicloud). Add the Apple ID + password on the Accounts page — the password is never stored in plaintext (encrypted vault only); enter the 2FA code on the card when Apple asks. Only the encrypted trusted session is kept; auto-sync picks up new and changed files."},
     "web":         {"name": "Web / Bookmarks", "method": "import", "detail": "Add a link manually, paste links, or import browser bookmarks HTML (Chrome/Firefox/Safari export)."},
 }
 
@@ -194,7 +195,7 @@ def add_item(d, tag=True):
 
 COLLECTED_CONTACT_KINDS = ("contact", "group", "chat")
 
-def mirror_collected_contact(d):
+def mirror_collected_contact(d, update=False):
     """Contacts collectors (Messenger, WhatsApp) store each person/group as an item (extra.kind=contact|group|chat).
     Mirror it into the contacts table too, so the Contacts page, /api/contacts and MCP search_contacts find it, linked
     to the same account. De-duplicated per platform + name + item URL (two people with the same name stay separate)."""
@@ -210,12 +211,20 @@ def mirror_collected_contact(d):
     notes = "\n".join(x for x in (url, "group chat" if raw.get("kind") == "group" else "",
                                     f"last message: {raw['last_message']}" if raw.get("last_message") else "") if x)
     c = conn()
-    ex = c.execute("SELECT id FROM contacts WHERE platform=? AND name=? AND (notes=? OR notes LIKE ?)",
-                   (d["platform"], d["title"], url, url + "\n%")).fetchone()
-    if ex: return ex["id"]
     def _strs(v): return [str(x) for x in v if x] if isinstance(v, list) else []
     phones = _strs(raw.get("phones")) or ([raw["phone"]] if raw.get("phone") else [])
     emails, org = _strs(raw.get("emails")), str(raw.get("org") or "")      # iCloud Contacts carry these too
+    if update and url:
+        # a changed contact (new version of the same item URL): refresh its row instead of adding a second one
+        ex = c.execute("SELECT id FROM contacts WHERE platform=? AND source LIKE 'collector:%' AND (notes=? OR notes LIKE ?) ORDER BY id LIMIT 1",
+                       (d["platform"], url, url + "\n%")).fetchone()
+        if ex:
+            c.execute("UPDATE contacts SET name=?, phones=?, emails=?, org=?, notes=? WHERE id=?",
+                      (d["title"], json.dumps(phones), json.dumps(emails), org, notes, ex["id"])); c.commit()
+            return ex["id"]
+    ex = c.execute("SELECT id FROM contacts WHERE platform=? AND name=? AND (notes=? OR notes LIKE ?)",
+                   (d["platform"], d["title"], url, url + "\n%")).fetchone()
+    if ex: return ex["id"]
     cur = c.execute("INSERT INTO contacts(name,phones,emails,org,platform,account_id,notes,is_sample,source,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (d["title"], json.dumps(phones), json.dumps(emails), org, d["platform"], d.get("account_id"), notes, 0, src, now_iso()))
     c.commit(); return cur.lastrowid
@@ -223,6 +232,7 @@ def mirror_collected_contact(d):
 def update_item(item_id, d):
     d = {k: v for k, v in d.items() if k in ITEM_FIELDS}
     if "tags" in d: d["tags"] = json.dumps(d["tags"], ensure_ascii=False)
+    if isinstance(d.get("raw"), (dict, list)): d["raw"] = json.dumps(d["raw"], ensure_ascii=False)[:20000]
     if not d: return
     if any(k in d for k in (*media.FIELDS, "media_url", "raw")):   # re-derive the media fields from the merged row
         cur = conn().execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
@@ -232,6 +242,25 @@ def update_item(item_id, d):
             d.update(media.for_db(merged))
     if isinstance(d.get("raw"), (dict, list)): d["raw"] = json.dumps(d["raw"], ensure_ascii=False)[:20000]
     c = conn(); c.execute(f"UPDATE items SET {','.join(k+'=?' for k in d)} WHERE id=?", list(d.values()) + [item_id]); c.commit()  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
+    if "raw" in d or "title" in d:
+        r = c.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
+        if r: mirror_collected_contact(dict(r), update=True)
+
+def merge_item_raw(item_id, patch: dict):
+    """Merge keys into an item's raw JSON (e.g. the outcome of an un-save attempt). Never touches anything else."""
+    c = conn(); r = c.execute("SELECT raw FROM items WHERE id=?", (item_id,)).fetchone()
+    if not r: return False
+    try: raw = json.loads(r["raw"] or "{}")
+    except ValueError: raw = {}
+    if not isinstance(raw, dict): raw = {}
+    raw.update(patch)
+    c.execute("UPDATE items SET raw=? WHERE id=?", (json.dumps(raw, ensure_ascii=False)[:20000], item_id)); c.commit()
+    return True
+
+def get_item_raw(item_id) -> dict:
+    r = conn().execute("SELECT raw FROM items WHERE id=?", (item_id,)).fetchone()
+    try: return json.loads(r["raw"] or "{}") if r else {}
+    except ValueError: return {}
 
 def get_item(item_id):
     r = rows(conn().execute("SELECT i.*, a.display_name AS account_name, a.handle AS account_handle, a.platform AS account_platform FROM items i LEFT JOIN accounts a ON a.id=i.account_id WHERE i.id=?", (item_id,)))
@@ -331,11 +360,22 @@ def add_account(d):
     d.setdefault("created_at", now_iso()); d.setdefault("platform", "web")
     c = conn()
     if d.get("handle"):
-        ex = c.execute("SELECT id FROM accounts WHERE platform=? AND lower(handle)=lower(?)", (d["platform"], d["handle"])).fetchone()
-        if ex: return ex["id"], False
+        ex = find_account(d["platform"], d["handle"])
+        if ex: return ex, False
     cols = list(d)
     cur = c.execute(f"INSERT INTO accounts({','.join(cols)}) VALUES({','.join('?'*len(cols))})", list(d.values()))  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
     c.commit(); return cur.lastrowid, True
+
+def norm_handle(h) -> str:
+    """'@Js_Main ' -> 'js_main' (how collectors, session files and sync_state name an account)."""
+    return str(h or "").strip().lstrip("@").strip().lower()
+
+def find_account(platform, handle):
+    """Id of the account row for this platform + handle ('@x' == 'x', case-insensitive), or None."""
+    h = norm_handle(handle)
+    if not h: return None
+    r = conn().execute("SELECT id FROM accounts WHERE platform=? AND ltrim(lower(trim(handle)),'@')=? ORDER BY id LIMIT 1", (platform, h)).fetchone()
+    return r["id"] if r else None
 
 def update_account(aid, d):
     d = {k: v for k, v in d.items() if k in ACCOUNT_FIELDS}
@@ -368,3 +408,32 @@ def list_accounts(q="", platform=None, status=None, sort="platform", order="asc"
     total = c.execute(f"SELECT count(*) FROM accounts a {w}", args).fetchone()[0]  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
     res = rows(c.execute(f"SELECT a.*, (SELECT count(*) FROM items i WHERE i.account_id=a.id) AS item_count, (SELECT count(*) FROM contacts k WHERE k.account_id=a.id) AS contact_count FROM accounts a {w} ORDER BY {col} {o} LIMIT ? OFFSET ?", args + [limit, offset]))  # nosec B608 - identifiers come from fixed allow-lists (ITEM/CONTACT/ACCOUNT_FIELDS, sort maps); values are bound
     return {"total": total, "accounts": res}
+
+# ---------------- un-save setting (manual collects only; auto-sync never un-saves) ----------------
+UNSAVE_KEY = "unsave"
+
+def get_unsave_settings() -> dict:
+    """{"platforms": {platform: bool}, "accounts": {"platform@handle": bool}}. Missing = off."""
+    r = conn().execute("SELECT value FROM settings WHERE key=?", (UNSAVE_KEY,)).fetchone()
+    try: v = json.loads(r["value"]) if r else {}
+    except ValueError: v = {}
+    v = v if isinstance(v, dict) else {}
+    return {"platforms": {k: bool(x) for k, x in (v.get("platforms") or {}).items()},
+            "accounts": {k: bool(x) for k, x in (v.get("accounts") or {}).items()}}
+
+def unsave_enabled(platform, account="") -> bool:
+    """Per-account setting wins over the per-platform one; default OFF."""
+    s = get_unsave_settings(); h = norm_handle(account)
+    if h and h != "default" and f"{platform}@{h}" in s["accounts"]: return s["accounts"][f"{platform}@{h}"]
+    return bool(s["platforms"].get(platform, False))
+
+def set_unsave(platform, account, enabled):
+    """enabled: True / False, or None to drop the per-account override (falls back to the platform setting)."""
+    s = get_unsave_settings(); h = norm_handle(account)
+    if h and h != "default":
+        if enabled is None: s["accounts"].pop(f"{platform}@{h}", None)
+        else: s["accounts"][f"{platform}@{h}"] = bool(enabled)
+    elif enabled is None: s["platforms"].pop(platform, None)
+    else: s["platforms"][platform] = bool(enabled)
+    set_setting(UNSAVE_KEY, s)
+    return s

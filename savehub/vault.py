@@ -221,3 +221,47 @@ def decrypt_session(doc: dict, aad: bytes) -> bytes:
     try: return _dec(k, str(doc.get("data") or ""), aad)
     except (InvalidTag, ValueError):
         raise VaultKeyMismatch("cannot decrypt the session file: wrong SAVEHUB_VAULT_KEY, or the file was renamed/tampered with")
+
+
+# ---------------- automatic-login credentials (dashboard form -> auto sign-in; NEVER returned by any API or MCP tool) --------
+# Separate from the password-manager entries above (which a logged-in dashboard user may reveal): these are only ever
+# decrypted in memory by the on-box login job (savehub.collector.autologin) and handed to the app's own sign-in form.
+# Table login_credentials(account_id, cipher) holds "v1:<base64(nonce|AES-256-GCM(json{u,p})|tag)>", AAD per account.
+def _login_aad(aid): return f"savehub:login:{int(aid)}".encode()
+
+def _login_table():
+    c = db.conn()
+    c.execute("CREATE TABLE IF NOT EXISTS login_credentials(account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, "
+              "cipher TEXT NOT NULL, updated_at TEXT)")
+    return c
+
+def set_login(aid, username, password):
+    """Store the sign-in name + password for the automatic login (dashboard form only). Returns metadata only."""
+    import json as _json
+    if not isinstance(password, str) or not password: raise VaultError("password must be a non-empty string")
+    if not isinstance(username, str) or not username.strip(): raise VaultError("username must be a non-empty string")
+    if len(password) > MAX_LEN or len(username) > 320: raise VaultError("username or password too long")
+    if not db.get_account(aid): raise VaultError("account not found")
+    token = _enc(_require_ready(), _json.dumps({"u": username.strip(), "p": password}).encode(), _login_aad(aid))
+    c = _login_table()
+    c.execute("INSERT INTO login_credentials(account_id,cipher,updated_at) VALUES(?,?,?) ON CONFLICT(account_id) DO UPDATE SET "
+              "cipher=excluded.cipher, updated_at=excluded.updated_at", (int(aid), token, db.now_iso())); c.commit()
+    return {"ok": True, "has_login": True, "updated_at": db.now_iso()}
+
+def get_login(aid):
+    """(username, password) for the on-box login job, or None. In-memory only: never put this in a response or a log.
+    Needs only the master key (the auto-sync daemon on the box may run without the dashboard password in its env)."""
+    import json as _json
+    r = _login_table().execute("SELECT cipher FROM login_credentials WHERE account_id=?", (int(aid),)).fetchone()
+    if not r: return None
+    try: d = _json.loads(_dec(_checked_key(), r[0], _login_aad(aid)).decode())
+    except (InvalidTag, ValueError): raise VaultKeyMismatch("could not decrypt the saved login (wrong SAVEHUB_VAULT_KEY or tampered data)")
+    return d.get("u") or "", d.get("p") or ""
+
+def has_login(aid) -> bool:
+    try: return bool(_login_table().execute("SELECT 1 FROM login_credentials WHERE account_id=?", (int(aid),)).fetchone())
+    except Exception: return False
+
+def delete_login(aid):
+    c = _login_table(); n = c.execute("DELETE FROM login_credentials WHERE account_id=?", (int(aid),)).rowcount; c.commit()
+    return {"ok": True, "deleted": n}
