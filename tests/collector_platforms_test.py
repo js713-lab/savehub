@@ -461,7 +461,7 @@ def wechat_fake():
     INIT = {"BaseResponse": {"Ret": 0}, "SyncKey": {"Count": 1, "List": [{"Key": 1, "Val": 1}]}, "AddMsgList": []}
     SYNC = {"BaseResponse": {"Ret": 0}, "AddMsgList": [
         {"MsgId": "9001", "MsgType": 49, "AppMsgType": 5, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1700000010,
-         "FileName": "吉隆坡咖啡馆", "Content": "<title>吉隆坡咖啡馆</title><des>kopi</des><url>https://www.xiaohongshu.com/explore/abc9001</url>"},
+         "FileName": "微信传输笔记", "Content": "<title>微信传输笔记</title><des>kopi</des><url>https://www.xiaohongshu.com/explore/abc9001</url>"},
         {"MsgId": "9002", "MsgType": 1, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1700000005,
          "Content": "see https://www.nasa.gov/artemis/9002 and more"},
         {"MsgId": "9003", "MsgType": 49, "AppMsgType": 6, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1700000001,
@@ -486,7 +486,7 @@ def test_wechat_filehelper_collect(browser, tmp_path):
             "AddMsgList": [{"MsgId": "51", "MsgType": 51, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1}]}
     SYNC = {"BaseResponse": {"Ret": 0}, "AddMsgList": [
         {"MsgId": "9001", "MsgType": 49, "AppMsgType": 5, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1700000010,
-         "FileName": "吉隆坡咖啡馆", "Content": "<title>吉隆坡咖啡馆</title><des>kopi</des><url>https://www.xiaohongshu.com/explore/abc9001</url>"},
+         "FileName": "微信传输笔记", "Content": "<title>微信传输笔记</title><des>kopi</des><url>https://www.xiaohongshu.com/explore/abc9001</url>"},
         {"MsgId": "9002", "MsgType": 1, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1700000005,
          "Content": "see https://www.nasa.gov/artemis/9002 and more"},
         {"MsgId": "9003", "MsgType": 49, "AppMsgType": 6, "ToUserName": "filehelper", "FromUserName": "@me", "CreateTime": 1700000001,
@@ -497,7 +497,7 @@ def test_wechat_filehelper_collect(browser, tmp_path):
     items = collect(browser, f, "wechat")
     by = {i.external_id: i for i in items}
     assert set(by) == {"9001", "9002", "9003"}
-    assert "xiaohongshu.com/explore/abc9001" in by["9001"].url and by["9001"].title == "吉隆坡咖啡馆"
+    assert "xiaohongshu.com/explore/abc9001" in by["9001"].url and by["9001"].title == "微信传输笔记"
     assert by["9002"].url == "https://www.nasa.gov/artemis/9002"
     assert by["9003"].url.endswith("#msg/9003") and by["9003"].extra.get("app_type") == "file"
     col = get_collector("wechat")

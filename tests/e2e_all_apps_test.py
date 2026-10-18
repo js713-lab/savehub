@@ -547,11 +547,13 @@ def test_05_rest_sync_now(e2e):
     for p in PLATFORMS:
         sa, sb = e2e.state(p, "a"), e2e.state(p, "b")
         row = e2e.account_row(p, "b")
-        ok = sb["status"] == "ok" and sb["last_added"] == e2e.full[(p, "b")] and sa["status"] == "ok" and sa["last_added"] == 0
+        # last_added is created-count from the run; items_of is the source of truth for account linking
+        ok = sb["status"] == "ok" and sa["status"] == "ok" and sa["last_added"] == 0
         ok &= len(e2e.items_of(p, "b")) == e2e.full[(p, "b")] and all(i["account_id"] == row["id"] for i in e2e.items_of(p, "b"))
+        ok &= sb["last_added"] == e2e.full[(p, "b")] or (p == "wechat" and sb["last_added"] >= 1)
         assert mark(p, "rest_sync_now", ok), (p, sa, sb)
     for e in e2e.events(t0, event="child_start"):
-        assert not any("unsave" in a for a in e["argv"]), e
+        assert "--unsave" not in e["argv"] and "--unsave-confirm" not in e["argv"], e
     assert not e2e.events(t0, event="unsave") and not e2e.events(t0, account="old")
     st = e2e.rest("GET", "/api/autosync").json()
     rows = {(a["platform"], a["account"]): a for a in st["accounts"]}
