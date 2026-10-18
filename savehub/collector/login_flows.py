@@ -126,10 +126,14 @@ def _visible(page, sel: str) -> bool:
 def _classify(page, f: LoginFlow) -> tuple:
     """Look at the page right now and decide the outcome, or ("", ...) if still loading/unknown."""
     if f.success_sel() and _visible(page, f.success_sel()): return ("connected", "", {})
-    if f.captcha and _visible(page, f.captcha): return ("needs_captcha", "the app showed a captcha; solve it in the browser on the box", {})
     if f.otp and _visible(page, f.otp): return ("needs_code", "the app asked for a verification code (2FA/OTP)", {})
+    u = (page.url or "").lower()
+    # Arkose MatchKey / two-step interstitial (common on fresh headless/box IPs) — do not hang as unknown
+    if "two_step_verification" in u or "arkose" in u or "/captcha" in u:
+        return ("needs_captcha", "the app showed a security check (Arkose/captcha); solve it on the box dashboard", {})
+    if f.captcha and _visible(page, f.captcha): return ("needs_captcha", "the app showed a captcha; solve it in the browser on the box", {})
     # Meta checkpoint pages (often before the OTP field paints) — surface needs_code instead of hanging
-    if "checkpoint" in (page.url or "").lower():
+    if "checkpoint" in u:
         return ("needs_code", "the app opened a checkpoint; enter the verification code on the dashboard", {})
     if f.qr and _visible(page, f.qr): return ("needs_qr", "the app wants a QR scan", {})
     if f.error and _visible(page, f.error): return ("wrong_password", "the app rejected the username or password", {})
