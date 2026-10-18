@@ -548,9 +548,10 @@ def test_05_rest_sync_now(e2e):
         sa, sb = e2e.state(p, "a"), e2e.state(p, "b")
         row = e2e.account_row(p, "b")
         # last_added is created-count from the run; items_of is the source of truth for account linking
+        n_b = len(e2e.items_of(p, "b"))
         ok = sb["status"] == "ok" and sa["status"] == "ok" and sa["last_added"] == 0
-        ok &= len(e2e.items_of(p, "b")) == e2e.full[(p, "b")] and all(i["account_id"] == row["id"] for i in e2e.items_of(p, "b"))
-        ok &= sb["last_added"] == e2e.full[(p, "b")] or (p == "wechat" and sb["last_added"] >= 1)
+        ok &= n_b == e2e.full[(p, "b")] and all(i["account_id"] == row["id"] for i in e2e.items_of(p, "b"))
+        ok &= sb["last_added"] == e2e.full[(p, "b")] or (p == "wechat" and n_b == e2e.full[(p, "b")] and sb.get("last_collected", 0) >= 1)
         assert mark(p, "rest_sync_now", ok), (p, sa, sb)
     for e in e2e.events(t0, event="child_start"):
         assert "--unsave" not in e["argv"] and "--unsave-confirm" not in e["argv"], e
