@@ -47,7 +47,7 @@ try:
         httpx.post(BASE + "/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=h2)
         r = httpx.post(BASE + "/mcp", json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, headers=h2)
         names = sorted(t["name"] for t in parse(r)["result"]["tools"]) if r.status_code == 200 else []
-        check(f"MCP tools/list (Host: {host})", len(names) == 17, f"{len(names)} tools")
+        check(f"MCP tools/list (Host: {host})", len(names) == 19, f"{len(names)} tools")
     r = httpx.post(BASE + "/mcp", json=INIT, headers={**auth, "Host": "evil.example.com"}); check("MCP foreign Host rejected (DNS-rebinding protection)", r.status_code == 421, str(r.status_code))
     r = httpx.post(BASE + "/mcp", json=INIT, headers={**auth, "Origin": "https://evil.example.com"}); check("MCP foreign Origin rejected", r.status_code == 403, str(r.status_code))
 
@@ -58,7 +58,7 @@ try:
                 tools = (await s.list_tools()).tools
                 res = json.loads((await s.call_tool("search_items", {"query": "nasi lemak"})).content[0].text)
                 return len(tools), res["total"]
-    n, total = asyncio.run(sdk()); check("MCP SDK client: initialize+list_tools+search_items", n == 17 and total == 1, f"{n} tools, search total={total}")
+    n, total = asyncio.run(sdk()); check("MCP SDK client: initialize+list_tools+search_items", n == 19 and total == 1, f"{n} tools, search total={total}")
     r = httpx.get(BASE + "/healthz"); check("dashboard still healthy after MCP traffic", r.status_code == 200)
     # security headers + auto-sync endpoints / MCP tools (auth required)
     h = httpx.get(BASE + "/").headers

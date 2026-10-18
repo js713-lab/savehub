@@ -120,9 +120,16 @@ class MessengerCollector(ContactsCollector):
     def open(self, page, url, cfg, session_file=""):
         """messenger.com first (Continue as if FB cookies present), then facebook.com/messages."""
         from ..logutil import ev
+        last_nav_err = None
         for attempt, target in enumerate((url or self.home_url, self.FB_MESSAGES)):
             ev("messenger.open", url=target, attempt=attempt)
-            page.goto(target, wait_until="domcontentloaded", timeout=cfg.page_timeout_ms)
+            try:
+                page.goto(target, wait_until="domcontentloaded", timeout=cfg.page_timeout_ms)
+            except Exception as e:
+                # Offline / fixture-aborted hosts (unit tests) or transient net errors: try the next URL
+                last_nav_err = e
+                ev("messenger.open_failed", logging.WARNING, url=target, error=type(e).__name__)
+                continue
             self.wait_ready(page, min(cfg.page_timeout_ms, 20000))
             if self._inbox_ready(page):
                 return
@@ -130,7 +137,6 @@ class MessengerCollector(ContactsCollector):
                 self.wait_ready(page, min(cfg.page_timeout_ms, 20000))
                 if self._inbox_ready(page):
                     return
-            # cookie consent / "Not now" for notifications — ignore failures
             for dismiss in ('div[role="button"]:has-text("Not now")', 'button:has-text("Not Now")',
                             'div[role="button"]:has-text("Allow all cookies")'):
                 try:
@@ -139,6 +145,9 @@ class MessengerCollector(ContactsCollector):
                 except Exception: pass
             if self._inbox_ready(page):
                 return
+            # Only fall through to facebook.com/messages when we actually landed on a login/checkpoint page
+            if attempt == 0 and not self.is_login_page(page):
+                break
         self.ensure_logged_in(page, session_file)
 
     def targets(self, page, cfg, session_file=""):

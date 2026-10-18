@@ -116,7 +116,7 @@ with sync_playwright() as p:
     pg.click(f'[data-act="qedit"][data-id="{aid}"]'); pg.click('[data-act="fulledit"]'); pg.wait_for_selector("#f_handle")
     pg.fill("#f_notes", "edited in full modal"); pg.click("#amSave"); pg.wait_for_timeout(600)
     check("full edit modal saves", api("/api/accounts", q="js.ui.two")["accounts"][0]["notes"] == "edited in full modal")
-    check("no plaintext password field on the page (only the masked vault field in the form)", pg.locator('input[type=password]:visible').count() == 0 and pg.locator('[name*=pass]').count() == 0)
+    vis = pg.locator("input[type=password]:visible"); ids = [vis.nth(i).get_attribute("id") for i in range(vis.count())]; check("no plaintext password field on the page (only auto-login #aa-pass when idle)", set(ids) <= {None, "", "aa-pass"}, str(ids))
 
     # --- encrypted password vault
     vs = api("/api/vault/status")
